@@ -1,0 +1,103 @@
+version: "3.8"
+services:
+  onelike:
+    container_name: onelike
+    image: onelike-backend
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - /home/user/logs:/logs
+      - /home/user/data:/data
+      - /home/user/shareclasses:/shareclasses
+    restart: always
+    ports:
+      - 9090:8080
+    environment:
+      REDIS_HOST: redis-master
+      REDIS_PORT: 6379
+    depends_on:
+      - builder
+      - mysqldb
+      - redis-master
+      - redis-replica
+      - redis-sentinel
+  mysqldb:
+    platform: linux/x86_64 
+    container_name: mysqldb
+    image: mysql
+    command: --max_connections=2000 --innodb_use_native_aio=0
+    restart: always
+    volumes:
+      -  /home/user/db:/var/lib/mysql
+    ports: 
+     - 3307:3306 
+    environment:
+      MYSQL_DATABASE: onelike
+      MYSQL_ROOT_PASSWORD: ${ONELIKE_DB_PASSWORD}
+  nginx:
+    image: nginx:latest
+    container_name: nginx_server
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./default.conf:/etc/nginx/conf.d/default.conf:ro
+  builder:
+    image: maven:3.8.5-openjdk-17
+    container_name: maven_builder
+    volumes:
+      - .:/onelike-backend
+    working_dir: /onelike-backend
+    command: ["mvn", "clean", "install", "-DskipTests"]
+  redis-master:
+    image: redis:latest
+    container_name: redis-master
+    restart: always
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./redis-master.conf:/usr/local/etc/redis/redis-master.conf
+      - redis-data:/data
+    command: ["redis-server", "/usr/local/etc/redis/redis-master.conf"]
+  redis-replica:
+    image: redis:latest
+    container_name: redis-replica
+    restart: always
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    depends_on:
+      - redis-master
+    ports:
+      - "6380:6380"
+    volumes:
+      - ./redis-replica.conf:/usr/local/etc/redis/redis-replica.conf
+      - redis-data:/data
+    command: redis-server /usr/local/etc/redis/redis-replica.conf --replicaof redis-master 6379
+  redis-sentinel:
+    image: redis:latest
+    container_name: redis-sentinel
+    user: root
+    restart: always
+    environment:
+      - ALLOW_EMPTY_PASSWORD=yes
+    depends_on:
+      - redis-master
+      - redis-replica
+    ports:
+      - "26379:26379"
+    volumes:
+      - ./sentinel.conf:/usr/local/etc/redis/sentinel.conf
+    command: redis-sentinel /usr/local/etc/redis/sentinel.conf
+
+volumes:
+  redis-data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /home/user/redis-storage
+
+

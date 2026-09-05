@@ -1,0 +1,40 @@
+version: "3.8"
+services:
+  onelike:
+    container_name: onelike
+    image: onelike-backend
+    volumes:
+      - /home/user/logs:/logs
+      - /home/user/data:/data
+      - /home/user/shareclasses:/shareclasses
+    restart: always
+    ports:
+      - 9090:8080
+    environment:
+      REDIS_HOST: redis-master
+      REDIS_PORT: 6379
+    depends_on:
+      - mysqldb
+  mysqldb:
+    platform: linux/x86_64 
+    container_name: mysqldb
+    image: mysql
+    command: --max_connections=2000 --innodb_use_native_aio=0
+    restart: always
+    volumes:
+      -  /home/user/db:/var/lib/mysql
+    ports: 
+     - 3307:3306
+    environment:
+      MYSQL_DATABASE: onelike
+      MYSQL_ROOT_PASSWORD: ${ONELIKE_DB_PASSWORD}
+  nginx:
+    image: nginx:latest
+    container_name: nginx_server
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./default.conf:/etc/nginx/conf.d/default.conf:ro
+
+
