@@ -15,6 +15,12 @@
     <description>Service For Publishers</description>
     <properties>
         <java.version>17</java.version>
+        <!-- The Lombok version inherited from spring-boot-starter-parent:3.1.3 (1.18.28)
+             is incompatible with javac on JDK 17/21 in this environment: it throws
+             java.lang.NoSuchFieldError on JCTree$JCImport.qualid during annotation
+             processing. Verified multiple times that pinning 1.18.32 here compiles the
+             whole project cleanly with no other changes needed. -->
+        <lombok.version>1.18.32</lombok.version>
     </properties>
     <repositories>
         <repository>
@@ -24,6 +30,17 @@
         </repository>
     </repositories>
     <dependencies>
+        <!-- Loads a .env file (in the working directory) into Spring's Environment
+             at startup, so the ${VAR} placeholders in application*.properties resolve
+             the same way whether run via the IDE, `mvn spring-boot:run`, or a plain
+             jar - without this, only actual OS/container environment variables (e.g.
+             the ones docker-compose passes through) are seen; a .env file alone does
+             nothing on its own. -->
+        <dependency>
+            <groupId>me.paulschwarz</groupId>
+            <artifactId>spring-dotenv</artifactId>
+            <version>4.0.0</version>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
