@@ -5,10 +5,13 @@ HELP.md
 target/
 
 # Real secret values for the ${VAR} placeholders in application*.properties
-# and docker-compose*.yml - never commit this.
+# and docker-compose*.yml - never commit these. .env = local/dev (matches
+# application.properties), .env.prod = prod (matches application.prod.properties,
+# has a different ONELIKE_DB_PASSWORD).
 .env
 .env.*
 !.env.example
+!.env.prod.example
 
 ### STS ###
 .apt_generated
