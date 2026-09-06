@@ -4,6 +4,12 @@ HELP.md
 !**/src/test/**/target/
 target/
 
+# Real secret values for the ${VAR} placeholders in application*.properties
+# and docker-compose*.yml - never commit this.
+.env
+.env.*
+!.env.example
+
 ### STS ###
 .apt_generated
 .classpath
