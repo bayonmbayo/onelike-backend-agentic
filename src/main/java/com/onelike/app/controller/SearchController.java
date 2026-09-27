@@ -1,14 +1,13 @@
 package com.onelike.app.controller;
 
 
-import com.gargoylesoftware.htmlunit.BrowserVersion;
-import com.gargoylesoftware.htmlunit.WebClient;
-import com.gargoylesoftware.htmlunit.html.HtmlButton;
-import com.gargoylesoftware.htmlunit.html.HtmlPage;
 import com.onelike.app.model.*;
 import com.onelike.app.service.*;
+import com.onelike.app.util.ArticleImageCache;
 import com.onelike.app.util.Description;
+import com.onelike.app.util.GoogleNewsUrlDecoder;
 import com.onelike.app.util.OtherTool;
+import com.onelike.app.util.ProxyAuthenticator;
 import com.onelike.app.util.UrlLanguagePath;
 import com.onelike.app.util.UrlWebsite;
 import com.rometools.rome.feed.synd.SyndEntry;
@@ -16,7 +15,6 @@ import com.rometools.rome.feed.synd.SyndFeed;
 import com.rometools.rome.io.FeedException;
 import com.rometools.rome.io.SyndFeedInput;
 import com.rometools.rome.io.XmlReader;
-import io.github.bonigarcia.wdm.WebDriverManager;
 import lombok.extern.slf4j.Slf4j;
 import net.amygdalum.stringsearchalgorithms.search.StringFinder;
 import net.amygdalum.stringsearchalgorithms.search.StringMatch;
@@ -32,15 +30,6 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-import org.openqa.selenium.*;
-import org.openqa.selenium.firefox.FirefoxDriver;
-import org.openqa.selenium.firefox.FirefoxOptions;
-import org.openqa.selenium.htmlunit.HtmlUnitDriver;
-import org.openqa.selenium.remote.DesiredCapabilities;
-import org.openqa.selenium.remote.RemoteWebDriver;
-
-import org.openqa.selenium.support.ui.ExpectedConditions;
-import org.openqa.selenium.support.ui.WebDriverWait;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -49,11 +38,7 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.annotation.PostConstruct;
-import javax.imageio.ImageIO;
 import jakarta.servlet.http.HttpServletRequest;
-import javax.swing.*;
-import java.awt.*;
-import java.awt.image.BufferedImage;
 import java.io.*;
 import java.net.*;
 import java.net.Proxy;
@@ -66,8 +51,6 @@ import java.util.*;
 import java.util.List;
 import java.util.NoSuchElementException;
 import java.util.concurrent.TimeUnit;
-import java.util.logging.Level;
-import java.util.logging.Logger;
 
 import static com.onelike.app.util.InfoMint.*;
 import static java.lang.Thread.sleep;
@@ -109,6 +92,18 @@ public class SearchController {
     private Boolean searchNews;
 
     private static List<String> socialmedias;
+
+    public static final String HIBP_API_KEY = "a889a0d81a4a4103b0ece60b1b8353d7";
+    public static final String WEBSHARE_API_KEY = "6nsvg241gh1gexuzxh3fcba3p7nggmk09d1rx6w1";
+
+    /**
+     * Languages that need News rows. Must match EXACTLY what each
+     * SearchControllerXX passes to saveNews() -- note "Deutsch" and "Francais".
+     */
+    @Value("${onelike.news.languages:"
+            + "English,Deutsch,Spanish,Francais,Greek,Hindi,Indonesian,Italian,"
+            + "Japanese,Dutch,Portuguese,Russian,Turkish,Arabic,Chinese}")
+    private String[] newsLanguages;
 
     @PostConstruct
     private void initStaticDao() {
@@ -214,13 +209,7 @@ public class SearchController {
             return null;
         }
         Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(myproxy.getIp(), myproxy.getPort()));
-        Myproxy finalMyproxy = myproxy;
-        Authenticator.setDefault(new Authenticator() {
-            @Override
-            protected PasswordAuthentication getPasswordAuthentication() {
-                return new PasswordAuthentication(finalMyproxy.getProxyuser(), finalMyproxy.getProxypwd().toCharArray());
-            }
-        });
+        // Proxy credentials are served by the global ProxyAuthenticator.
 
         Document doc = null;
         try {
@@ -251,13 +240,7 @@ public class SearchController {
         }
 
         Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(myproxy.getIp(), myproxy.getPort()));
-        Myproxy finalMyproxy = myproxy;
-        Authenticator.setDefault(new Authenticator() {
-            @Override
-            protected PasswordAuthentication getPasswordAuthentication() {
-                return new PasswordAuthentication(finalMyproxy.getProxyuser(), finalMyproxy.getProxypwd().toCharArray());
-            }
-        });
+        // Proxy credentials are served by the global ProxyAuthenticator.
 
         Document doc = null;
         try {
@@ -539,7 +522,7 @@ public class SearchController {
     }
 
     public static JSONObject[] articlesOfAllSocialMedias(String language) throws Exception {
-        replaceInactiveProxies();
+        // replaceInactiveProxies();
 
         log.debug("--------------- " + language + " News --------------");
         JSONObject[] data = new JSONObject[2];
@@ -548,30 +531,6 @@ public class SearchController {
         JSONArray socialmediaList = new JSONArray();
         JSONArray socialmediaListWithoutCategory = new JSONArray();
 
-//        List<String> socialmedias = new ArrayList<>();
-//        socialmedias.add("Twitter");
-//        socialmedias.add("Facebook");
-//        socialmedias.add("Instagram");
-//        socialmedias.add("Telegram");
-//        socialmedias.add("Reddit");
-//        socialmedias.add("WhatsApp");
-//        socialmedias.add("Snapchat");
-//        socialmedias.add("TikTok");
-//        socialmedias.add("Discord");
-//        socialmedias.add("Tinder");
-//        socialmedias.add("Twitch");
-//        socialmedias.add("Linkedin");
-//        // socialmedias.add("Xing");
-//        socialmedias.add("Vkontakte");
-//        socialmedias.add("Wechat");
-//        socialmedias.add("YouTube");
-//
-//
-//        socialmedias.add("Pinterest");
-//        socialmedias.add("Github");
-//        socialmedias.add("Signal");
-//        socialmedias.add("Patreon");
-//        socialmedias.add("Onlyfans");
         for (String sm : socialmedias) {
             socialmediaList.add(articlesOf(language, sm, socialmediaListWithoutCategory));
         }
@@ -586,9 +545,6 @@ public class SearchController {
 
     public static JSONObject articlesOf(String language, String searchText, JSONArray allSocialMedias) throws Exception {
         log.debug("--------------- " + searchText + " " + language + " --------------");
-        System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "");
-        // System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "false");
-        // System.setProperty("jdk.http.auth.proxying.disabledSchemes", "false");
         long index = 0;
         boolean proxyAvailable = false;
         Myproxy myproxyTmp = null;
@@ -621,7 +577,6 @@ public class SearchController {
                     articleObject.put("news", new JSONArray());
                 }else{
                     articleObject.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getFeed()));
-                    // sortedNews = (JSONArray) new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getSocialMedia());
                 }
 
                 articleObject.put("linkspreview", new JSONArray());
@@ -653,12 +608,7 @@ public class SearchController {
 
         Myproxy myproxy = myproxyService.findById(index);
         Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(myproxy.getIp(), myproxy.getPort()));
-        Authenticator.setDefault(new Authenticator() {
-            @Override
-            protected PasswordAuthentication getPasswordAuthentication() {
-                return new PasswordAuthentication(myproxy.getProxyuser(), myproxy.getProxypwd().toCharArray());
-            }
-        });
+        // Proxy credentials are served by the global ProxyAuthenticator.
         String betterSearchText;
         URLConnection url = null;
         try {
@@ -710,22 +660,34 @@ public class SearchController {
             xmlReader = new XmlReader(url);
             SyndFeed feeder = new SyndFeedInput().build(xmlReader);
 
+            // Collect the entries we want first, so the whole feed is decoded in
+            // ONE batchexecute call instead of one call per article.
+            List<SyndEntry> goodEntries = new ArrayList<>();
+            List<String> googleUrls = new ArrayList<>();
+
             for (Iterator iterator = feeder.getEntries().iterator(); iterator.hasNext(); ) {
                 SyndEntry syndEntry = (SyndEntry) iterator.next();
                 if (isGoodNews(syndEntry.getTitle(), filterNewsList) && !syndEntry.getTitle().contains("discord")) {
-                    JSONObject item = new JSONObject();
-                    // System.out.println(syndEntry.getTitle());
-                    // System.out.println(syndEntry.getLink());
-                    item.put("title", syndEntry.getTitle());
-                    item.put("url", syndEntry.getLink());
-                    item.put("publishedat", syndEntry.getPublishedDate());
-                    item.put("timeago", toDuration(syndEntry.getPublishedDate().toString()));
-                    item.put("type", searchText); // Add Type of News : Twitter, Facebook, Instagram
-                    // System.out.println(syndEntry.getPublishedDate());
-                    news.add(item);
-                    allSocialMedias.add(item);
+                    goodEntries.add(syndEntry);
+                    googleUrls.add(syndEntry.getLink());
                 }
             }
+
+            // Anything that cannot be decoded comes back mapped to itself, so the
+            // feed keeps the Google URL rather than losing the article.
+            Map<String, String> realUrls = GoogleNewsUrlDecoder.decodeAll(googleUrls, myproxy);
+
+            for (SyndEntry syndEntry : goodEntries) {
+                JSONObject item = new JSONObject();
+                item.put("title", syndEntry.getTitle());
+                item.put("url", realUrls.get(syndEntry.getLink()));
+                item.put("publishedat", syndEntry.getPublishedDate());
+                item.put("timeago", toDuration(syndEntry.getPublishedDate().toString()));
+                item.put("type", searchText); // Add Type of News : Twitter, Facebook, Instagram
+                news.add(item);
+                allSocialMedias.add(item);
+            }
+
             articleObject.put("language", language);
             articleObject.put("name", searchText);
             articleObject.put("website", UrlWebsite.getWebsiteUrl(searchText));
@@ -774,8 +736,8 @@ public class SearchController {
                     arrayForLinksPreview.add(object);
                 }
             }
-            // articleObject.put("linkspreview", giveMeArrayOfLinks(myproxy, arrayForLinksPreview, language, searchText)); Not Working Now cause of selenium: Error Opening Browser
-            articleObject.put("linkspreview", new JSONArray());
+            // Works again now that the feed holds real publisher URLs: no browser needed.
+            articleObject.put("linkspreview", giveMeArrayOfLinks(myproxy, arrayForLinksPreview, language, searchText));
         } catch (Exception e) {
             e.printStackTrace();
             log.debug(searchText + " " + language + ": Error in reading XML");
@@ -820,7 +782,6 @@ public class SearchController {
                     articleObject.put("news", newsArrayJson);
                     newsBlockService.save(newsBlock);
 
-                    // articleObject.put("linkspreview", giveMeArrayOfLinks(myproxy, arrayForLinksPreview, language, searchText)); Not Working Now cause of selenium: Error Opening Browser
                     articleObject.put("linkspreview", new JSONArray());
                     articleObject.put("last_update", new Date());
                 }
@@ -833,35 +794,38 @@ public class SearchController {
     }
 
     public static JSONArray giveMeArrayOfLinks(Myproxy proxy, JSONArray arrayForLinksPreview, String language, String network) {
-        Document doc = null;
         JSONArray arrayLinks = new JSONArray();
+
+        List<String> pageUrls = new ArrayList<>();
         for (int i = 0; i < arrayForLinksPreview.size(); i++) {
             JSONObject object = (JSONObject) arrayForLinksPreview.get(i);
-            String url = object.getAsString("url");
-            String realUrl = getRealUrl(url, proxy);
-            if(realUrl != null && realUrl.trim().length() != 0){
-                doc = getWebsite(realUrl);
-            }else{
+            // The feed already carries the publisher URL -- decoding happened at ingest.
+            String realUrl = object.getAsString("url");
+
+            if (realUrl == null || realUrl.trim().isEmpty() || GoogleNewsUrlDecoder.isGoogleNewsUrl(realUrl)) {
+                continue; // never decoded; the redirect page has no og:image worth reading
+            }
+            pageUrls.add(realUrl);
+        }
+
+        // One call for the whole feed. Pages already in the article_image table cost
+        // zero proxy requests; only never-before-seen pages go through ImagePreview
+        // (page fetch + image HEAD) using the proxy that was just verified active.
+        Map<String, String> images = ArticleImageCache.resolveAll(pageUrls, proxy);
+
+        for (int i = 0; i < arrayForLinksPreview.size(); i++) {
+            JSONObject object = (JSONObject) arrayForLinksPreview.get(i);
+            String imageUrl = images.get(object.getAsString("url"));
+            if (imageUrl == null) {
                 continue;
             }
 
-            if (doc == null) {
-                continue;
-            }
-
-            Element link = doc.select("meta[property=og:image]").first();
-            if(link != null){
-                JSONObject linkPreview = new JSONObject();
-                String imageUrl = link.attr("content");
-                // System.out.println(imageUrl);
-                if (testImage(proxy, imageUrl)) {
-                    linkPreview.put("title", object.getAsString("title"));
-                    linkPreview.put("url", object.getAsString("url"));
-                    linkPreview.put("image", imageUrl);
-                    linkPreview.put("timeago", object.getAsString("timeago"));
-                    arrayLinks.add(linkPreview);
-                }
-            }
+            JSONObject linkPreview = new JSONObject();
+            linkPreview.put("title", object.getAsString("title"));
+            linkPreview.put("url", object.getAsString("url"));
+            linkPreview.put("image", imageUrl);
+            linkPreview.put("timeago", object.getAsString("timeago"));
+            arrayLinks.add(linkPreview);
         }
         if(arrayLinks.size() != 0){
             log.debug(network + ": I have retrieved preview images for " + language);
@@ -874,13 +838,7 @@ public class SearchController {
 
     public static Boolean testImage(Myproxy myproxy, String urlParam) {
         Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(myproxy.getIp(), myproxy.getPort()));
-        System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "");
-        Authenticator.setDefault(new Authenticator() {
-            @Override
-            protected PasswordAuthentication getPasswordAuthentication() {
-                return new PasswordAuthentication(myproxy.getProxyuser(), myproxy.getProxypwd().toCharArray());
-            }
-        });
+        // Proxy credentials are served by the global ProxyAuthenticator.
         URL url = null;
         try {
             url = new URL(urlParam);
@@ -902,15 +860,7 @@ public class SearchController {
 
     public static boolean isOnline(Myproxy myproxy) {
         Proxy proxy = new Proxy(Proxy.Type.HTTP, new InetSocketAddress(myproxy.getIp(), myproxy.getPort()));
-        System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "");
-        // System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "false");
-        // System.setProperty("jdk.http.auth.proxying.disabledSchemes", "false");
-        Authenticator.setDefault(new Authenticator() {
-            @Override
-            protected PasswordAuthentication getPasswordAuthentication() {
-                return new PasswordAuthentication(myproxy.getProxyuser(), myproxy.getProxypwd().toCharArray());
-            }
-        });
+        // Proxy credentials are served by the global ProxyAuthenticator.
         try {
             URLConnection url = new URL("https://www.google.com").openConnection(proxy);
             url.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36");
@@ -943,6 +893,11 @@ public class SearchController {
         }
 
         return false;
+    }
+
+    @Scheduled(fixedRate = 900000, initialDelay = 10000)
+    public void refreshProxies() {
+        replaceInactiveProxies();
     }
 
     @Scheduled(fixedRate = 300000)
@@ -984,17 +939,29 @@ public class SearchController {
         }
 
         if (allSocialNewsWithoutCategory != null && !allSocialNewsWithoutCategory.trim().equalsIgnoreCase("{\"news\" : []}")) {
-            if(firstNews != null && secondNews != null){
-                firstNews.setUpdated(new Date());
-                firstNews.setFeed(allSocialNews);
+            // First run for a language has no rows yet -- create them instead of
+            // skipping, which used to leave firstNews/secondNews null and then
+            // hand null to the repository ("Entity must not be null").
+            if (firstNews == null) {
+                firstNews = new News();
                 firstNews.setLanguage(language);
                 firstNews.setProperty(1);
-
-                secondNews.setUpdated(new Date());
-                secondNews.setAllFeedWithoutCategory(allSocialNewsWithoutCategory);
+            }
+            if (secondNews == null) {
+                secondNews = new News();
                 secondNews.setLanguage(language);
                 secondNews.setProperty(2);
             }
+
+            firstNews.setUpdated(new Date());
+            firstNews.setFeed(allSocialNews);
+            firstNews.setLanguage(language);
+            firstNews.setProperty(1);
+
+            secondNews.setUpdated(new Date());
+            secondNews.setAllFeedWithoutCategory(allSocialNewsWithoutCategory);
+            secondNews.setLanguage(language);
+            secondNews.setProperty(2);
 
             try {
                 newsService.save(firstNews, language);
@@ -1038,7 +1005,7 @@ public class SearchController {
         try {
             String accountUrl = account.trim().replace("@", "%40");
             URLConnection connection = new URL("https://haveibeenpwned.com/api/v3/breachedaccount/" + accountUrl + "?truncateResponse=false").openConnection();
-            connection.setRequestProperty("hibp-api-key", "a889a0d81a4a4103b0ece60b1b8353d7");
+            connection.setRequestProperty("hibp-api-key", HIBP_API_KEY);
             connection.connect();
 
             breaches = (JSONArray) new JSONParser(JSONParser.MODE_PERMISSIVE).parse(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
@@ -1160,7 +1127,9 @@ public class SearchController {
     }
 
     public static String cleanUrl(String url) {
-        String urlWithoutHttps = url.substring(8);
+        // Guard: publisher URLs are not all https:// -- substring(8) on a shorter
+        // or http:// URL would throw or mangle the host.
+        String urlWithoutHttps = url.replaceFirst("^https?://", "");
         String urlWithoutForwardslash = urlWithoutHttps.replaceAll("/", " ");
         String urlWithoutDash = urlWithoutForwardslash.replaceAll("-", " ");
         String urlWithoutPoint = urlWithoutDash.replaceAll("\\.", " ");
@@ -1200,8 +1169,6 @@ public class SearchController {
             @Override
             public int compare(JSONObject lhs, JSONObject rhs) {
                 DateTimeFormatter formatter = DateTimeFormatter.ofPattern("E MMM d H:m:s z u", Locale.ENGLISH);
-                ZonedDateTime z1 = ZonedDateTime.parse(lhs.get("publishedat").toString(), formatter);
-
                 LocalDateTime d1 = LocalDateTime.parse(lhs.get("publishedat").toString(), formatter);
                 LocalDateTime d2 = LocalDateTime.parse(rhs.get("publishedat").toString(), formatter);
                 int result = d1.compareTo(d2);
@@ -1265,56 +1232,22 @@ public class SearchController {
         return quoteService.getAllQuotes();
     }
 
+    /**
+     * Was a headless-Firefox RemoteWebDriver that loaded the Google News page and
+     * clicked the consent button by CSS class. Replaced by the batchexecute RPC:
+     * no browser, no sleep, and it returns the original URL when it cannot decode.
+     */
     public static String getRealUrl(String url, Myproxy proxy) {
-        String strUrl = null;
-        System.setProperty("webdriver.gecko.verboseLogging", "false");
-        Logger.getLogger("org.openqa.selenium").setLevel(Level.SEVERE);
-        System.setProperty(FirefoxDriver.SystemProperty.BROWSER_LOGFILE,"/dev/null");
-        FirefoxOptions options = new FirefoxOptions();
-        options.setHeadless(true);
-        WebDriver driver = null;
-        try {
-            driver = new RemoteWebDriver(new URL(IPBrowser), options);
-        } catch (Exception e) {
-            e.printStackTrace();
-            log.debug("Error on opening the Browser");
-            return strUrl;
-        }
-        driver.manage().timeouts().implicitlyWait(5, TimeUnit.SECONDS);
-        driver.manage().timeouts().pageLoadTimeout(5, TimeUnit.SECONDS);
-        driver.manage().timeouts().setScriptTimeout(5, TimeUnit.SECONDS);
-
-        JavascriptExecutor js = (JavascriptExecutor) driver;
-        driver.get(url);
-        js.executeScript("document.getElementsByClassName(\"VfPpkd-LgbsSe VfPpkd-LgbsSe-OWXEXe-k8QpJ VfPpkd-LgbsSe-OWXEXe-dgl2Hf nCP5yc AjY5Oe DuMIQc LQeN7 Nc7WLe\")[2].click();");
-
-        try {
-            Thread.sleep(3000);
-            strUrl = driver.getCurrentUrl();
-        } catch (Exception e) {
-            e.printStackTrace();
-            log.debug("Error on Sleep function");
-            return strUrl;
-        }
-
-        // System.out.println(strUrl);
-
-        driver.quit();
-
-        return strUrl;
+        return GoogleNewsUrlDecoder.decode(url, proxy);
     }
 
     public static void replaceInactiveProxies(){
         log.debug("--------------- Replacing Proxies --------------");
 
-        System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "");
-        // System.setProperty("jdk.http.auth.tunneling.disabledSchemes", "false");
-        // System.setProperty("jdk.http.auth.proxying.disabledSchemes", "false");
-
         JSONObject proxy_raw = null;
         try {
             URLConnection connection = new URL("https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=80").openConnection();
-            connection.setRequestProperty("Authorization", "6nsvg241gh1gexuzxh3fcba3p7nggmk09d1rx6w1");
+            connection.setRequestProperty("Authorization", WEBSHARE_API_KEY);
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36");
             connection.connect();
 
@@ -1330,7 +1263,7 @@ public class SearchController {
                     myproxy.setIp(ip);
                     myproxy.setPort(port);
                     myproxy.setProxyuser((String) proxy.get("username"));
-                    myproxy.setProxyuser((String) proxy.get("password"));
+                    myproxy.setProxypwd((String) proxy.get("password"));
                     myproxy.setActive(true);
                     myproxyService.save(myproxy);
                 }
@@ -1361,6 +1294,9 @@ public class SearchController {
             }
         } catch (Exception e) {
             e.printStackTrace();
+        } finally {
+            // Credentials may have been rotated above -- drop the cached ones.
+            ProxyAuthenticator.evictCache();
         }
     }
 
