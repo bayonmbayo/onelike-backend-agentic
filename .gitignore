@@ -40,3 +40,7 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Runtime logs ###
+# Rolling application log and its archives - noise in every diff.
+logs/
