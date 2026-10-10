@@ -22,6 +22,10 @@ You are invoked only after the user has confirmed a plan from `planner`. If the 
 4. Match existing code style file by file.
 5. Build and run relevant checks as you go (`./mvnw compile`, `./mvnw test` if applicable tests exist) rather than leaving all verification to `verifier`.
 
+## Fix passes
+
+When you are sent back to fix a defect `verifier` found, your scope is **the reported defect plus anything sharing its root cause at the same choke point**. Normalising a value in one place and then grepping every other site that carries that same type is in scope — that is the fix. A defect with a *different* root cause is reported, not fixed, however tempting and however small.
+
 ## What you must NOT do
 
 - Do not start on an unconfirmed plan.

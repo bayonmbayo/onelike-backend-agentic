@@ -11,7 +11,8 @@ Same job as the frontend's `controller`: review how the process performed this c
 
 ## Output format
 
+- **Which of last cycle’s process recommendations were actually applied** — name them, and say which were not and why. Without this line, approved process edits quietly go unwritten.
 - Per-stage note (planner/builder/verifier/learner/manager), one line each.
-- Confirmation-gate check: honored or not.
+- Confirmation-gate check: honored or not — including any post-gate change, and whether it was routed correctly per AGENTIC-LOOP.md’s "Change after confirmation" rule.
 - Cross-repo/bridge check, if applicable this cycle.
 - Process adjustments for next cycle's `planner`.
