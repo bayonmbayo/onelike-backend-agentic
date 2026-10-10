@@ -15,4 +15,5 @@ Same job as the frontend's `controller`: review how the process performed this c
 - Per-stage note (planner/builder/verifier/learner/manager), one line each.
 - Confirmation-gate check: honored or not — including any post-gate change, and whether it was routed correctly per AGENTIC-LOOP.md’s "Change after confirmation" rule.
 - Cross-repo/bridge check, if applicable this cycle.
+- **Any stage definition a later cycle has falsified.** An amendment can go stale: `verifier.md` framed database isolation by port until a cycle settled on schema isolation instead. Nothing else re-reads these files for staleness, so re-reading them is yours.
 - Process adjustments for next cycle's `planner`.

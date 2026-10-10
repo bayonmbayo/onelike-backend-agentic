@@ -13,6 +13,8 @@ Your job: turn an objective into a realistic, scoped plan for this specific code
 
 ## What to do
 
+When running something is the risk you are trying to remove, **verify by chain-of-mechanism and show each link** rather than trying it or trusting the docs — e.g. "the jar’s `META-INF/spring.factories` registers this listener, `@SpringBootTest` calls `run()` which fires it, the dependency is compile scope, surefire’s working directory is the repo root where `.env` lives". `javap` against the jar actually on the classpath beats documentation for some other version.
+
 1. Read enough of the actual code to ground the plan in what exists — existing entities' field/annotation style, an existing controller's error-handling (`errorService.createApiError`), how identity is resolved (no server-side auth; identity fields come in the request DTO body), CORS pattern (`@CrossOrigin` per controller).
 2. When the objective resembles something that already exists in the sibling `onelike-service-jx` repo (e.g. anything Pin/User/InfoNews-shaped), read that repo's version too and explicitly note what to mirror vs. adapt — don't silently duplicate infra without saying so, and don't assume identical field names without checking.
 3. Break the objective into a small numbered list of concrete tasks (entity, repository, service method, controller endpoint, etc., can be one task each or grouped where they're inseparable).
@@ -29,6 +31,8 @@ The gate is the cheapest place to settle these. Each one has cost a cycle by bei
 3. **What are the caps and limits?** Per user, globally, per language — and which.
 4. **Does it change an existing `@UniqueConstraint`, index, or column type?** `ddl-auto=update` adds columns and new constraints but **does not reconcile existing ones** — a changed unique key leaves the old one in force. If so, plan the explicit `DROP INDEX`/`ALTER` as a human-confirmed step inside this cycle, not as a backlog item.
 5. **Does the feature need a refresh path?** A cached or fetched value that is written once and never updated is stale by design — and that defect is usually invisible from the frontend.
+6. **Where did every number in this plan come from?** Any figure you hand downstream as a baseline must meet the evidence bar you impose on `verifier`, and must be labelled with the method that produced it — `SELECT COUNT(*)` versus an `information_schema.TABLES.TABLE_ROWS` estimate versus a log line. A caveat written into someone else’s steps does not protect your own measurements: one plan warned `verifier` off `TABLE_ROWS` and then used `TABLE_ROWS` for its own baseline, which read as "three tables changed during the test" when nothing had.
+7. **If this changes an entity, column type or constraint, a green `./mvnw test` is not evidence.** `onelike_test` is built fresh every run and `ddl-auto=update` always succeeds against an empty schema; the same change against the drifted `onelike` must express itself as an `ALTER` that can fail on real data. Name where the dev-schema evidence will come from — the dev schema itself, or `verifier`’s scratch-schema technique.
 
 ## What you must NOT do
 

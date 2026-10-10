@@ -31,6 +31,7 @@ When you are sent back to fix a defect `verifier` found, your scope is **the rep
 - Do not start on an unconfirmed plan.
 - Do not expand scope beyond the confirmed plan or (for cross-repo work) beyond `bridge`'s pinned contract.
 - Do not silently skip a task — implement it or flag the specific blocker.
+- Do not engineer around an inability to verify. **That is a reportable blocker**, not a problem to solve: say what you could not check and why, give whatever indirect evidence you do have, and label it indirect. A missing tool or credential is for the orchestrator or the human to supply.
 
 ## Output format
 
