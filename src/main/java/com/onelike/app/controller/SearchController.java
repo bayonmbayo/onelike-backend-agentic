@@ -8,6 +8,7 @@ import com.onelike.app.util.Description;
 import com.onelike.app.util.GoogleNewsUrlDecoder;
 import com.onelike.app.util.OtherTool;
 import com.onelike.app.util.ProxyAuthenticator;
+import com.onelike.app.util.SocialMediaPlatforms;
 import com.onelike.app.util.UrlLanguagePath;
 import com.onelike.app.util.UrlWebsite;
 import com.rometools.rome.feed.synd.SyndEntry;
@@ -91,8 +92,6 @@ public class SearchController {
     @Value("${onelike.database.searchnews}")
     private Boolean searchNews;
 
-    private static List<String> socialmedias;
-
     public static final String HIBP_API_KEY = "a889a0d81a4a4103b0ece60b1b8353d7";
     public static final String WEBSHARE_API_KEY = "6nsvg241gh1gexuzxh3fcba3p7nggmk09d1rx6w1";
 
@@ -110,29 +109,6 @@ public class SearchController {
         myproxyService = this.proxyService;
         newsService = this._newsService;
         newsBlockService = this._newsBlockService;
-        socialmedias = Arrays.asList(
-                "Twitter",
-                "Facebook",
-                "Instagram",
-                "Telegram",
-                "Reddit",
-                "WhatsApp",
-                "Snapchat",
-                "TikTok",
-                "Discord",
-                "Tinder",
-                "Twitch",
-                "Linkedin",
-                // "Xing",
-                "Vkontakte",
-                "Wechat",
-                "YouTube",
-                "Pinterest",
-                "Github",
-                "Signal",
-                "Patreon",
-                "Onlyfans"
-        );
     }
 
     @GetMapping(value = "/version")
@@ -531,7 +507,7 @@ public class SearchController {
         JSONArray socialmediaList = new JSONArray();
         JSONArray socialmediaListWithoutCategory = new JSONArray();
 
-        for (String sm : socialmedias) {
+        for (String sm : SocialMediaPlatforms.ALL) {
             socialmediaList.add(articlesOf(language, sm, socialmediaListWithoutCategory));
         }
         socialmediaObject.put("socialmedias", socialmediaList);
@@ -541,6 +517,21 @@ public class SearchController {
         data[1] = socialmediaObjectWithoutCategory;
 
         return data;
+    }
+
+    /**
+     * Percent-encodes the Google News query. The 20 built-in platform names are
+     * single alphanumeric words, so this is a no-op for the 5-minute feed job of
+     * all 15 languages; it exists for user themes, whose titles are free text
+     * and may contain spaces, "&" or non-ASCII characters that would otherwise
+     * be concatenated raw into the URL and either break the query string or
+     * throw a MalformedURLException.
+     *
+     * Spaces become %20 rather than "+" to stay consistent with the pre-encoded
+     * betterSearchText special cases just below.
+     */
+    private static String encodeSearchText(String searchText) {
+        return URLEncoder.encode(searchText, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
     public static JSONObject articlesOf(String language, String searchText, JSONArray allSocialMedias) throws Exception {
@@ -612,7 +603,7 @@ public class SearchController {
         String betterSearchText;
         URLConnection url = null;
         try {
-            url = new URL("https://news.google.com/rss/search?q=" + searchText + UrlLanguagePath.getUrlLanguagePath(language)).openConnection(proxy);
+            url = new URL("https://news.google.com/rss/search?q=" + encodeSearchText(searchText) + UrlLanguagePath.getUrlLanguagePath(language)).openConnection(proxy);
             if (searchText.equalsIgnoreCase("Xing")) {
                 betterSearchText = "Xing%20social%20media";
                 url = new URL("https://news.google.com/rss/search?q=" + betterSearchText + UrlLanguagePath.getUrlLanguagePath(language)).openConnection(proxy);

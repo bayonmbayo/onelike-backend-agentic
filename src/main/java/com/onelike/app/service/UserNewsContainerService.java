@@ -1,0 +1,653 @@
+package com.onelike.app.service;
+
+import com.onelike.app.controller.SearchController;
+import com.onelike.app.exception.ContainerException;
+import com.onelike.app.model.NewsBlock;
+import com.onelike.app.model.User;
+import com.onelike.app.model.UserNewsContainer;
+import com.onelike.app.model.dto.ContainerDTO;
+import com.onelike.app.model.dto.ContainerDeleteDTO;
+import com.onelike.app.model.dto.ContainerOrderDTO;
+import com.onelike.app.model.dto.ContainerOrderItem;
+import com.onelike.app.repository.UserNewsContainerRepository;
+import com.onelike.app.repository.UserRepository;
+import com.onelike.app.util.SocialMediaPlatforms;
+import lombok.extern.slf4j.Slf4j;
+import net.minidev.json.JSONArray;
+import net.minidev.json.JSONObject;
+import net.minidev.json.parser.JSONParser;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * The Social News cards of one signed-in user: the 20 built-in platforms plus
+ * the user's own themes ("AI", "Crypto"), in the user's own order.
+ *
+ * Three deliberate properties of this service:
+ *
+ * 1. Reads never write. A user who has never customised anything has no rows at
+ *    all and still gets the 20 defaults back (seeded:false), and a read also
+ *    reconciles: platforms added to SocialMediaPlatforms.ALL after a user was
+ *    seeded are appended as views, stored platform rows whose name has since
+ *    left ALL are skipped but kept. Rows are created only on the user's first
+ *    write (create / reorder).
+ *
+ * 2. Theme content is cached per theme, not per user. A theme's articles live
+ *    in NewsBlock keyed by (display title, language), which is exactly the key
+ *    SearchController.articlesOf uses, so the second user who adds "Crypto"
+ *    reuses the first user's fetch and costs no proxy budget at all.
+ *
+ * 3. A theme belongs to the language it was created for and is invisible in
+ *    every other language: a "Crypto" created in English does not appear in the
+ *    German Social News, and the same user may create a separate German
+ *    "Crypto" (language is part of a theme's identity, see isRendered and the
+ *    unique key on UserNewsContainer). The 20 platforms, by contrast, exist in
+ *    every language and are shared by all of them - including their order.
+ *    The cap of onelike.containers.max-themes-per-user is global, not per
+ *    language: 10 themes in the platform, however they are spread.
+ */
+@Service
+@Slf4j
+public class UserNewsContainerService {
+
+    public static final String KIND_PLATFORM = "PLATFORM";
+    public static final String KIND_THEME = "THEME";
+    public static final String DEFAULT_LANGUAGE = "English";
+
+    public static final int TITLE_MAX_LENGTH = 40;
+
+    @Autowired
+    UserNewsContainerRepository containerRepository;
+
+    @Autowired
+    UserRepository userRepository;
+
+    @Autowired
+    NewsBlockService newsBlockService;
+
+    @Value("${onelike.containers.max-themes-per-user:10}")
+    private int maxThemesPerUser;
+
+    /** A NewsBlock younger than this is reused instead of triggering a live fetch. */
+    @Value("${onelike.containers.block-max-age-ms:3600000}")
+    private long blockMaxAgeMs;
+
+    /**
+     * Same list and same default as SearchController: note the values are
+     * "Deutsch" / "Francais", not "German" / "French".
+     */
+    @Value("${onelike.news.languages:"
+            + "English,Deutsch,Spanish,Francais,Greek,Hindi,Indonesian,Italian,"
+            + "Japanese,Dutch,Portuguese,Russian,Turkish,Arabic,Chinese}")
+    private String[] newsLanguages;
+
+    // ------------------------------------------------------------------
+    // A - list
+    // ------------------------------------------------------------------
+
+    /**
+     * The caller's cards for ONE language: every platform, plus only the themes
+     * created for that language. A missing, blank or unknown uuid is not an
+     * error: it answers the 20 defaults with seeded:false, exactly like a known
+     * user who has never written anything.
+     *
+     * seeded stays language-independent on purpose - it answers "has this user
+     * ever customised anything", and the platform rows it is really about are
+     * shared by all languages. A user with only a German theme therefore reads
+     * seeded:true with the 20 untouched defaults in English.
+     */
+    public JSONObject myContainers(String uuid, String language) throws Exception {
+        String resolvedLanguage = normalizeLanguage(language);
+
+        List<UserNewsContainer> stored = new ArrayList<>();
+        if (uuid != null && !uuid.trim().isEmpty()) {
+            User user = userRepository.findUserByUuid(uuid.trim());
+            if (user != null) {
+                stored = containerRepository.findByUserOrderByPositionAsc(user);
+            }
+        }
+
+        JSONObject result = new JSONObject();
+        result.put("seeded", !stored.isEmpty());
+        result.put("containers", containersJson(stored, resolvedLanguage));
+        return result;
+    }
+
+    // ------------------------------------------------------------------
+    // B - create
+    // ------------------------------------------------------------------
+
+    /**
+     * Adds a theme. Idempotent: an existing theme with the same case-insensitive
+     * title answers created:false and that container rather than an error.
+     *
+     * @param title the already trimmed and validated title
+     */
+    public JSONObject createContainer(ContainerDTO containerDTO, String title) throws Exception {
+        String language = normalizeLanguage(containerDTO.getLanguage());
+        User user = upsertUser(containerDTO);
+        String namekey = title.toLowerCase();
+
+        // Same title in another language is a different card, so the language is
+        // part of the lookup: it is what lets a user who made "Crypto" in
+        // English make a German "Crypto" too, instead of getting created:false
+        // and a row they cannot see in German news.
+        UserNewsContainer existing = containerRepository
+                .findByUserAndKindAndNamekeyAndLanguage(user, KIND_THEME, namekey, language);
+        if (existing != null) {
+            JSONObject result = new JSONObject();
+            result.put("created", false);
+            result.put("container", themeJson(existing, wirePosition(user, existing, language), language));
+            return result;
+        }
+
+        // Global cap, not per language: "max. 10 custom theme news in the
+        // platform", however the user spread them over languages.
+        if (containerRepository.countByUserAndKind(user, KIND_THEME) >= maxThemesPerUser) {
+            throw new ContainerException("container.limit.reached");
+        }
+
+        List<UserNewsContainer> stored = containerRepository.findByUserOrderByPositionAsc(user);
+        int position;
+        if (stored.isEmpty()) {
+            seedDefaults(user, language);
+            position = SocialMediaPlatforms.ALL.size();
+        } else {
+            position = nextPosition(stored);
+        }
+
+        UserNewsContainer container = new UserNewsContainer();
+        container.setUser(user);
+        container.setKind(KIND_THEME);
+        container.setName(title);
+        container.setNamekey(namekey);
+        container.setPosition(position);
+        container.setLanguage(language);
+        container.setCreatedat(new Date());
+        containerRepository.save(container);
+
+        loadThemeContent(title, language);
+
+        JSONObject result = new JSONObject();
+        result.put("created", true);
+        result.put("container", themeJson(container, wirePosition(user, container, language), language));
+        return result;
+    }
+
+    /**
+     * Makes sure a NewsBlock exists for this theme, fetching live only when the
+     * cached block is missing or older than onelike.containers.block-max-age-ms.
+     *
+     * Failures are swallowed on purpose: the container has already been created,
+     * and an empty news array is a legitimate answer when every proxy is down.
+     *
+     * The third argument of articlesOf MUST be a throwaway JSONArray - the list
+     * it is given is the global all-news feed (News property=2) that /searchnews
+     * serves, and a user's private theme has no business leaking into it.
+     */
+    private void loadThemeContent(String title, String language) {
+        try {
+            NewsBlock block = newsBlockService.findBySocialMediaAndLanguage(title, language);
+            if (isFresh(block)) {
+                log.debug("I am reusing the cached news block for the theme " + title + " " + language);
+                return;
+            }
+
+            log.info("I am fetching live news for the theme " + title + " " + language
+                    + " (this spends proxy budget)");
+            SearchController.articlesOf(language, title, new JSONArray());
+        } catch (Exception e) {
+            e.printStackTrace();
+            log.debug("I could not fetch news for the theme " + title + " " + language);
+        }
+    }
+
+    private boolean isFresh(NewsBlock block) {
+        return block != null
+                && block.getFeed() != null
+                && block.getUpdated() != null
+                && (new Date().getTime() - block.getUpdated().getTime()) <= blockMaxAgeMs;
+    }
+
+    // ------------------------------------------------------------------
+    // C - delete
+    // ------------------------------------------------------------------
+
+    /**
+     * Deletes one of the caller's own themes and renumbers what is left to
+     * 0..n-1. Platform rows are never deletable.
+     */
+    @Transactional
+    public void deleteContainer(ContainerDeleteDTO containerDeleteDTO) throws Exception {
+        User user = resolveCaller(containerDeleteDTO.getUuid(), containerDeleteDTO.getFirstname(),
+                containerDeleteDTO.getName(), containerDeleteDTO.getDisplayname(), containerDeleteDTO.getEmail());
+
+        UserNewsContainer container = containerRepository.findById(containerDeleteDTO.getId()).orElse(null);
+        if (container == null
+                || !KIND_THEME.equals(container.getKind())
+                || container.getUser() == null
+                || container.getUser().getId() != user.getId()) {
+            throw new ContainerException("container.notfound");
+        }
+
+        containerRepository.delete(container);
+
+        List<UserNewsContainer> remaining = containerRepository.findByUserOrderByPositionAsc(user);
+        densify(remaining);
+        containerRepository.saveAll(remaining);
+    }
+
+    // ------------------------------------------------------------------
+    // D - reorder
+    // ------------------------------------------------------------------
+
+    /**
+     * Applies the client's complete ordered list. Never destructive: stored rows
+     * the client left out keep their relative order and are appended after the
+     * submitted ones, and submitted entries that match nothing are ignored.
+     *
+     * One transaction for all rows - unlike CleanupService, where each step is
+     * its own transaction on purpose, a half-applied order is worse than none.
+     *
+     * The order arrives from ONE language's page, so it can only contain that
+     * language's themes; the other languages' themes are among the omitted rows
+     * and are therefore preserved, in their previous relative order, after the
+     * submitted ones. There is a single position column shared by all
+     * languages, so that is as far as it goes: a reorder done in German pushes
+     * the English themes behind the platforms in the English view (their order
+     * among themselves is kept, and nothing is ever lost). Platform order is
+     * shared by every language by design.
+     */
+    @Transactional
+    public JSONArray reorder(ContainerOrderDTO containerOrderDTO) throws Exception {
+        User user = resolveCaller(containerOrderDTO.getUuid(), containerOrderDTO.getFirstname(),
+                containerOrderDTO.getName(), containerOrderDTO.getDisplayname(), containerOrderDTO.getEmail());
+        String language = normalizeLanguage(containerOrderDTO.getLanguage());
+
+        List<UserNewsContainer> stored = containerRepository.findByUserOrderByPositionAsc(user);
+        if (stored.isEmpty()) {
+            seedDefaults(user, language);
+            stored = containerRepository.findByUserOrderByPositionAsc(user);
+        }
+
+        Map<String, UserNewsContainer> byKey = new HashMap<>();
+        for (UserNewsContainer container : stored) {
+            byKey.put(key(container.getKind(), container.getNamekey(), themeLanguage(container)), container);
+        }
+
+        List<UserNewsContainer> ordered = new ArrayList<>();
+        Set<Long> taken = new HashSet<>();
+        int ignored = 0;
+
+        for (ContainerOrderItem item : containerOrderDTO.getContainers()) {
+            if (item == null || item.getKind() == null || item.getName() == null
+                    || item.getName().trim().isEmpty()) {
+                ignored++;
+                continue;
+            }
+
+            String kind = item.getKind().trim().toUpperCase();
+            String submittedName = item.getName().trim();
+            // The submitted language is what a THEME is matched on, so a German
+            // reorder can never grab, renumber or hide the English theme of the
+            // same name.
+            UserNewsContainer container = byKey.get(key(kind, submittedName.toLowerCase(), language));
+
+            if (container == null && KIND_PLATFORM.equals(kind) && SocialMediaPlatforms.isPlatform(submittedName)) {
+                // A platform that joined SocialMediaPlatforms.ALL after this user
+                // was seeded: a read shows it, so a reorder has to be able to
+                // place it. This is a write path already, so give it a row.
+                container = platformRow(user, canonicalPlatformName(submittedName), ordered.size(), language);
+                containerRepository.save(container);
+                byKey.put(key(KIND_PLATFORM, container.getNamekey(), themeLanguage(container)), container);
+            }
+
+            if (container == null || taken.contains(container.getId())) {
+                ignored++;
+                continue;
+            }
+
+            ordered.add(container);
+            taken.add(container.getId());
+        }
+
+        for (UserNewsContainer container : stored) {
+            if (!taken.contains(container.getId())) {
+                ordered.add(container);
+            }
+        }
+
+        if (ignored > 0) {
+            log.warn("I am ignoring " + ignored + " unknown container(s) of the submitted order for "
+                    + containerOrderDTO.getEmail());
+        }
+
+        densify(ordered);
+        containerRepository.saveAll(ordered);
+
+        return containersJson(ordered, language);
+    }
+
+    // ------------------------------------------------------------------
+    // Identity
+    // ------------------------------------------------------------------
+
+    /**
+     * Create path: upsert by email, mirroring PinService.pin - the caller is
+     * whoever the body says they are, because there is no server-side session.
+     */
+    private User upsertUser(ContainerDTO containerDTO) {
+        return upsertUser(containerDTO.getUuid(), containerDTO.getFirstname(), containerDTO.getName(),
+                containerDTO.getDisplayname(), containerDTO.getEmail());
+    }
+
+    private User upsertUser(String uuid, String firstname, String name, String displayname, String email) {
+        User user = userRepository.findUserByEmail(email);
+        if (user == null) {
+            user = new User();
+            user.setUuid(uuid);
+            user.setFirstname(firstname);
+            user.setName(name);
+            user.setDisplayname(displayname);
+            user.setEmail(email);
+            user.setCreatedat(new Date());
+            userRepository.save(user);
+        } else {
+            user.setUuid(uuid);
+            user.setFirstname(firstname);
+            user.setName(name);
+            user.setDisplayname(displayname);
+            user.setUpdatedat(new Date());
+            userRepository.save(user);
+        }
+        return user;
+    }
+
+    /**
+     * Mutating paths that touch existing rows (delete, reorder): the email and
+     * the uuid must resolve to the SAME user, so a body can never act on
+     * somebody else's rows.
+     *
+     * Deliberately NOT merged with upsertUser: one shared "resolve the caller"
+     * helper would quietly make all three endpoints upsert and the guard would
+     * be gone.
+     *
+     * If neither lookup resolves, this is a genuine first write (a brand new
+     * user whose very first action is a reorder), so it upserts like the create
+     * path - nothing can be stolen when there is nothing stored yet.
+     */
+    private User resolveCaller(String uuid, String firstname, String name, String displayname, String email)
+            throws ContainerException {
+        User byEmail = userRepository.findUserByEmail(email);
+        User byUuid = userRepository.findUserByUuid(uuid);
+
+        if (byEmail == null && byUuid == null) {
+            return upsertUser(uuid, firstname, name, displayname, email);
+        }
+
+        if (byEmail == null || byUuid == null || byEmail.getId() != byUuid.getId()) {
+            throw new ContainerException("container.identity.mismatch");
+        }
+
+        return byEmail;
+    }
+
+    // ------------------------------------------------------------------
+    // Rows
+    // ------------------------------------------------------------------
+
+    private void seedDefaults(User user, String language) {
+        log.info("I am seeding the " + SocialMediaPlatforms.ALL.size() + " default containers for " + user.getEmail());
+        List<UserNewsContainer> rows = new ArrayList<>();
+        for (int i = 0; i < SocialMediaPlatforms.ALL.size(); i++) {
+            rows.add(platformRow(user, SocialMediaPlatforms.ALL.get(i), i, language));
+        }
+        containerRepository.saveAll(rows);
+    }
+
+    private UserNewsContainer platformRow(User user, String name, int position, String language) {
+        UserNewsContainer container = new UserNewsContainer();
+        container.setUser(user);
+        container.setKind(KIND_PLATFORM);
+        container.setName(name);
+        container.setNamekey(name.toLowerCase());
+        container.setPosition(position);
+        container.setLanguage(language);
+        container.setCreatedat(new Date());
+        return container;
+    }
+
+    private void densify(List<UserNewsContainer> containers) {
+        for (int i = 0; i < containers.size(); i++) {
+            UserNewsContainer container = containers.get(i);
+            if (container.getPosition() == null || container.getPosition() != i) {
+                container.setPosition(i);
+                container.setUpdatedat(new Date());
+            }
+        }
+    }
+
+    private int nextPosition(List<UserNewsContainer> containers) {
+        int max = -1;
+        for (UserNewsContainer container : containers) {
+            if (container.getPosition() != null && container.getPosition() > max) {
+                max = container.getPosition();
+            }
+        }
+        return max + 1;
+    }
+
+    private int positionOf(UserNewsContainer container) {
+        return container.getPosition() == null ? 0 : container.getPosition();
+    }
+
+    /**
+     * The index this row has in the array the listing endpoints return for this
+     * language, so a single-container answer agrees with A and D. Uses the same
+     * isRendered predicate, so a row that is not rendered does not consume an
+     * index either. Falls back to the stored position if the row is somehow not
+     * in the user's list.
+     */
+    private int wirePosition(User user, UserNewsContainer container, String language) {
+        int index = 0;
+        for (UserNewsContainer stored : containerRepository.findByUserOrderByPositionAsc(user)) {
+            if (stored.getId() == container.getId()) {
+                return index;
+            }
+            if (!isRendered(stored, language)) {
+                continue;
+            }
+            index++;
+        }
+        return positionOf(container);
+    }
+
+    /**
+     * Whether a stored row is part of what a read of this language shows - the
+     * single definition of that, shared by containersJson and wirePosition so
+     * the two can never drift apart.
+     *
+     * A THEME belongs to the language it was created for and is invisible in
+     * all the others. A PLATFORM exists in every language, but is skipped (not
+     * deleted) once its name has left SocialMediaPlatforms.ALL.
+     */
+    private boolean isRendered(UserNewsContainer container, String language) {
+        if (KIND_THEME.equals(container.getKind())) {
+            return themeLanguage(container).equalsIgnoreCase(language);
+        }
+        return SocialMediaPlatforms.isPlatform(container.getName());
+    }
+
+    /**
+     * The language a theme belongs to. A row written before language was stored
+     * (or with a blank one) counts as English rather than as "every language",
+     * so it stays visible in exactly one Social News.
+     */
+    private String themeLanguage(UserNewsContainer container) {
+        return languageOf(container, DEFAULT_LANGUAGE);
+    }
+
+    /**
+     * Every date that goes on the wire has to pass through here.
+     *
+     * json-smart special-cases java.util.Date EXACTLY and writes it with
+     * toString() ("Sat Sep 19 09:27:15 CEST 2026"), which is the form
+     * /service/news already emits for a platform card. A subclass does not hit
+     * that branch: Hibernate hands back java.sql.Timestamp, which falls through
+     * to bean reflection and serialises as {"nanos":63000000}. So the same
+     * container answered a string on the create that built it (in-memory Date)
+     * and an object on every later read (Timestamp from the DB).
+     *
+     * Copying the millis into a plain java.util.Date removes both the wrong
+     * form and the instability. Note the copy must stay: Timestamp.getTime()
+     * alone is not enough, the declared type is what json-smart dispatches on.
+     */
+    private Date wireDate(Date date) {
+        return date == null ? null : new Date(date.getTime());
+    }
+
+    private String languageOf(UserNewsContainer container, String fallback) {
+        return container.getLanguage() == null || container.getLanguage().trim().isEmpty()
+                ? fallback
+                : container.getLanguage();
+    }
+
+    /**
+     * Match key for the reorder. The language is part of it for a THEME, whose
+     * identity includes the language, and deliberately NOT for a PLATFORM: the
+     * 20 platform rows are seeded once with whatever language the user happened
+     * to be reading at the time and are shared by every language, so keying
+     * them by language would make a German reorder match none of them.
+     */
+    private String key(String kind, String namekey, String language) {
+        if (KIND_THEME.equals(kind)) {
+            return kind + "|" + namekey + "|" + language.toLowerCase();
+        }
+        return kind + "|" + namekey;
+    }
+
+    private String canonicalPlatformName(String name) {
+        for (String platform : SocialMediaPlatforms.ALL) {
+            if (platform.equalsIgnoreCase(name)) {
+                return platform;
+            }
+        }
+        return name;
+    }
+
+    // ------------------------------------------------------------------
+    // JSON
+    // ------------------------------------------------------------------
+
+    /**
+     * Renders the stored rows that belong to this language (see isRendered),
+     * then reconciles without writing anything: platforms of ALL with no row are
+     * appended at the end in ALL order. An empty input therefore renders the 20
+     * defaults.
+     *
+     * Themes of other languages are simply not rendered - they keep their row
+     * and their position, they are just not part of this language's page.
+     *
+     * The position on the wire is the index in this array, so it is always dense
+     * and gap-free even for the appended rows that have no stored position.
+     */
+    private JSONArray containersJson(List<UserNewsContainer> containers, String language) throws Exception {
+        JSONArray result = new JSONArray();
+        Set<String> renderedPlatforms = new HashSet<>();
+
+        for (UserNewsContainer container : containers) {
+            if (!isRendered(container, language)) {
+                continue;
+            }
+            if (KIND_THEME.equals(container.getKind())) {
+                result.add(themeJson(container, result.size(), themeLanguage(container)));
+            } else {
+                renderedPlatforms.add(container.getName().toLowerCase());
+                result.add(platformJson(canonicalPlatformName(container.getName()), result.size()));
+            }
+        }
+
+        for (String platform : SocialMediaPlatforms.ALL) {
+            if (!renderedPlatforms.contains(platform.toLowerCase())) {
+                result.add(platformJson(platform, result.size()));
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * A built-in card: the client already has its feed from /service/news, so
+     * only the identity and the place in the order travel.
+     */
+    private JSONObject platformJson(String name, int position) {
+        JSONObject container = new JSONObject();
+        container.put("kind", KIND_PLATFORM);
+        container.put("name", name);
+        container.put("position", position);
+        return container;
+    }
+
+    /**
+     * A user card, with its content. description and website are deliberately
+     * empty/null: a theme is not a social network, so the UrlWebsite /
+     * Description defaults ("https://www.google.com" and "Describe me") would be
+     * actively wrong here. linkspreview is always [] in phase 1.
+     */
+    private JSONObject themeJson(UserNewsContainer container, int position, String language) throws Exception {
+        JSONObject result = new JSONObject();
+        result.put("kind", KIND_THEME);
+        result.put("name", container.getName());
+        result.put("position", position);
+        result.put("id", container.getId());
+
+        NewsBlock block = newsBlockService.findBySocialMediaAndLanguage(container.getName(), language);
+        if (block == null || block.getFeed() == null) {
+            result.put("news", new JSONArray());
+            result.put("last_update", wireDate(container.getUpdatedat() != null
+                    ? container.getUpdatedat()
+                    : container.getCreatedat()));
+        } else {
+            result.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(block.getFeed()));
+            result.put("last_update", wireDate(block.getUpdated()));
+        }
+
+        result.put("description", "");
+        result.put("website", null);
+        result.put("linkspreview", new JSONArray());
+        return result;
+    }
+
+    // ------------------------------------------------------------------
+    // Language
+    // ------------------------------------------------------------------
+
+    /**
+     * An unrecognised language falls back to English instead of erroring - the
+     * language only picks which NewsBlock is read, and a bad value should not
+     * cost the user their card.
+     */
+    public String normalizeLanguage(String language) {
+        if (language == null || language.trim().isEmpty()) {
+            return DEFAULT_LANGUAGE;
+        }
+        if (newsLanguages != null) {
+            for (String known : newsLanguages) {
+                if (known != null && known.trim().equalsIgnoreCase(language.trim())) {
+                    return known.trim();
+                }
+            }
+        }
+        return DEFAULT_LANGUAGE;
+    }
+}
