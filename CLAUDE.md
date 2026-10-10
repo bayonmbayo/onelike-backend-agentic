@@ -4,7 +4,8 @@ Spring Boot 3.1.3 / Java, Maven build, MySQL (Hibernate `ddl-auto=update`, no Fl
 
 ## Commands
 - `./mvnw spring-boot:run` — run locally
-- `./mvnw test` — run tests
+- `./mvnw test` — run tests; the `test` profile (`src/test/resources/application-test.properties`) points them at the `onelike_test` schema on the same host MySQL, never the live `onelike`
+- To reset test state: `DROP DATABASE onelike_test;` — the next `./mvnw test` recreates it from the entities
 - `./mvnw package` — build the jar
 - `docker-compose up` — local MySQL (see `docker-compose.yml` for port/db mapping — this repo's compose maps `3307:3306`, separate from other sibling repos' MySQL containers)
 
