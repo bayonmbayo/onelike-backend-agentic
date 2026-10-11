@@ -65,8 +65,24 @@ public class UserNewsContainer {
 
     private Integer position;
 
-    /** One of onelike.news.languages, e.g. "English" / "Deutsch" / "Francais". */
-    @Column(length = 32)
+    /**
+     * One of onelike.news.languages, e.g. "English" / "Deutsch" / "Francais".
+     *
+     * NOT NULL and nothing else - no Java field initialiser and no
+     * columnDefinition default:
+     *
+     * - an initialiser would be dead code. Every write path in
+     *   UserNewsContainerService routes the language through
+     *   normalizeLanguage, which answers DEFAULT_LANGUAGE for null, blank and
+     *   unknown values, so no caller can reach a save() with a null here. An
+     *   initialiser would advertise a looser contract than the service
+     *   actually enforces.
+     * - a DB-side DEFAULT would be equally idle, and dev and prod already
+     *   carry NOT NULL DEFAULT 'English' applied by hand. This declaration
+     *   exists so a FRESHLY built schema (a new environment, the test schema)
+     *   agrees with them, not to migrate anything.
+     */
+    @Column(length = 32, nullable = false)
     private String language;
 
     private Date createdat;

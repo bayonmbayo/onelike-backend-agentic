@@ -33,6 +33,12 @@ Each repo runs its own six-stage loop (`planner → builder → verifier → lea
 - Do not invent a contract from scratch when a close precedent already exists (in the backend repo, in the web frontend's already-working call to the same endpoint, or in a legacy sibling repo like `onelike-service-jx`) — read it and adapt deliberately, noting deviations.
 - Do not gloss over a real mismatch to make the spec look cleaner than the code actually is — surface it.
 
+## The durable contract file, and who may write it
+
+In practice the spec is not a one-shot hand-off: it is a durable document (`CONTAINERS-CONTRACT.md`) that is **re-checked every cycle**. A pinned spec older than the current cycle is re-checked against both repos’ code rather than reused on trust, and a change to a pinned field’s *dynamics* invalidates it exactly as a change to its shape would.
+
+You have no write tools, so you **author** contract claims and the orchestrator **transcribes** them. That division is the real one — "bridge owns the file" was never true. A single factual correction sourced **verbatim from another stage** (for instance `verifier` measuring that a JSON object’s key order is hash order, not insertion order) may be transcribed without resuming you, provided the file’s own re-check line names the stage it came from. Anything requiring judgement about what the contract should say comes back to you.
+
 ## Output format
 
 - **Endpoint**: method + path (backend) and where the client calls it from (file/function), naming which client (web or mobile).

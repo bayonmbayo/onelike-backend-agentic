@@ -11,6 +11,7 @@ import com.onelike.app.model.dto.ContainerOrderDTO;
 import com.onelike.app.model.dto.ContainerOrderItem;
 import com.onelike.app.repository.UserNewsContainerRepository;
 import com.onelike.app.repository.UserRepository;
+import com.onelike.app.util.InfoMint;
 import com.onelike.app.util.SocialMediaPlatforms;
 import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONArray;
@@ -638,7 +639,11 @@ public class UserNewsContainerService {
      * A user card, with its content. description and website are deliberately
      * empty/null: a theme is not a social network, so the UrlWebsite /
      * Description defaults ("https://www.google.com" and "Describe me") would be
-     * actively wrong here. linkspreview is always [] in phase 1.
+     * actively wrong here.
+     *
+     * linkspreview is recomputed on every read from the article_image cache and
+     * is NOT stored (see previewOf). A card with no block, or a block with a
+     * null feed, still answers [].
      */
     private JSONObject themeJson(UserNewsContainer container, int position, String language) throws Exception {
         JSONObject result = new JSONObject();
@@ -648,20 +653,80 @@ public class UserNewsContainerService {
         result.put("id", container.getId());
 
         NewsBlock block = newsBlockService.findBySocialMediaAndLanguage(container.getName(), language);
+        JSONArray linkspreview = new JSONArray();
         if (block == null || block.getFeed() == null) {
             result.put("news", new JSONArray());
             result.put("last_update", wireDate(container.getUpdatedat() != null
                     ? container.getUpdatedat()
                     : container.getCreatedat()));
         } else {
-            result.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(block.getFeed()));
+            // Parsed ONCE: the very object that goes out as "news" is the one
+            // the previews are derived from, so the two fields can only ever
+            // describe the same snapshot of the feed. A second read or a second
+            // parse of the block would let a preview entry point at an article
+            // this response does not contain.
+            Object feed = new JSONParser(JSONParser.MODE_PERMISSIVE).parse(block.getFeed());
+            result.put("news", feed);
             result.put("last_update", wireDate(block.getUpdated()));
+            linkspreview = previewOf(feed, language, container.getName());
         }
 
         result.put("description", "");
         result.put("website", null);
-        result.put("linkspreview", new JSONArray());
+        result.put("linkspreview", linkspreview);
         return result;
+    }
+
+    /**
+     * The preview entries for a theme card, recomputed from the already parsed
+     * feed on every read.
+     *
+     * This costs no proxy budget and issues no page fetch: it goes through
+     * SearchController.giveMeArrayOfLinksFromCache, whose null proxy makes
+     * ArticleImageCache return right after its one batched cache query. The
+     * rows it reads are there because articlesOf already scanned these very
+     * pages when it built the block - loadThemeContent discards the JSONObject
+     * articlesOf returns, so the only thing that was ever lost was this small
+     * projection, which is why recovering it here is free.
+     *
+     * Deliberately NOT stored on NewsBlock: article_image purges negatives, so
+     * a stored snapshot would rot against the cache while the feed it belongs
+     * to is still current. Recompute-on-read always agrees with the cache as it
+     * is now.
+     *
+     * The first N cut and the 20/11 constants mirror articlesOf exactly, down
+     * to the same language.equalsIgnoreCase("English") test, because the feed
+     * is the same sorted array articlesOf stored: taking its head reproduces
+     * the same candidates in the same order. Keeping the cap (rather than
+     * passing the whole feed, which the cache would answer just as cheaply)
+     * also guards a feed whose later items were never scanned, or were scanned
+     * under a different constant.
+     *
+     * Never throws: a feed that does not parse as an array of objects costs the
+     * card its previews, never its news or its last_update.
+     */
+    private JSONArray previewOf(Object feed, String language, String title) {
+        try {
+            if (!(feed instanceof JSONArray)) {
+                return new JSONArray();
+            }
+            JSONArray news = (JSONArray) feed;
+
+            int numPreviewImages = language.equalsIgnoreCase("English")
+                    ? InfoMint.NUMBER_OF_PREVIEW_IMAGES_FOR_ENGLISH
+                    : InfoMint.NUMBER_OF_PREVIEW_IMAGES;
+
+            JSONArray candidates = new JSONArray();
+            for (int i = 0; i < news.size() && i < numPreviewImages; i++) {
+                candidates.add(news.get(i));
+            }
+
+            return SearchController.giveMeArrayOfLinksFromCache(candidates, language, title);
+        } catch (Exception e) {
+            e.printStackTrace();
+            log.debug("I could not build the preview images for the theme " + title + " " + language);
+            return new JSONArray();
+        }
     }
 
     // ------------------------------------------------------------------

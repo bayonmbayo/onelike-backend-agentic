@@ -793,6 +793,41 @@ public class SearchController {
         return articleObject;
     }
 
+    /**
+     * The cache-only face of {@link #giveMeArrayOfLinks}: it answers preview
+     * entries for the pages that are ALREADY in the article_image table and
+     * never scans a page, never opens a connection and never spends a single
+     * proxy request.
+     *
+     * That is not a hope about the current workload, it is a property of the
+     * null proxy: {@link com.onelike.app.util.ArticleImageCache#resolveAll}
+     * does its one batched findByUrlHashIn, fills the result map with the
+     * positives it found, and then null-checks the proxy and returns before the
+     * scan loop - so with proxy == null the unscanned pages are simply left
+     * out of the answer. Nothing downstream of that check can run.
+     *
+     * This exists as a named method rather than as a bare giveMeArrayOfLinks(null, ...)
+     * call so the intent is falsifiable: a future edit that starts
+     * dereferencing proxy before the null check has to come past this javadoc,
+     * and the read path that relies on "free" (UserNewsContainerService.themeJson,
+     * recomputing a theme card's linkspreview on every read) is greppable.
+     *
+     * @param articles the preview candidates, in feed order
+     * @return the entries whose page is cached with an image, in that same
+     *         order; pages not in the cache are omitted, never scanned
+     */
+    public static JSONArray giveMeArrayOfLinksFromCache(JSONArray articles, String language, String network) {
+        return giveMeArrayOfLinks(null, articles, language, network);
+    }
+
+    /**
+     * @param proxy an ACTIVE proxy to scan never-before-seen pages with, or
+     *              null for cache-only (see
+     *              {@link #giveMeArrayOfLinksFromCache}): a null proxy cannot
+     *              scan and cannot spend budget, because
+     *              ArticleImageCache.resolveAll null-checks it and returns
+     *              right after the batch cache query.
+     */
     public static JSONArray giveMeArrayOfLinks(Myproxy proxy, JSONArray arrayForLinksPreview, String language, String network) {
         JSONArray arrayLinks = new JSONArray();
 

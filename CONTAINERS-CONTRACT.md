@@ -2,9 +2,11 @@
 
 The contract the backend implements and the `onelike-agentic` frontend builds against, for custom themed cards in Social News.
 
-Backend phase 1 is **built, verified and committed** (`c69c7e7`). All four endpoints work live and the dev schema is correct. Nothing on the backend blocks the frontend.
+Backend phase 1 is **built, verified and committed** (`c69c7e7`). The 30-minute theme refresh landed in `555e74f`. In the current cycle a theme's `linkspreview` stops being empty. All four endpoints work live and the dev schema is correct. Nothing on the backend blocks the frontend.
 
-Every field name below was verified against the real code in `controller/UserNewsContainerController.java`, `service/UserNewsContainerService.java` and `model/dto/Container*.java` — **not** relayed from the planning-stage spec, which predates the language-scoping change. Where this file and `bridge`'s original spec disagree, this file is right.
+The frontend side is **built and committed** too — `onelike-agentic` at `916f399`, via `574720a`, `0a90b62`, `8b495af`. This file is therefore no longer a forward spec for one side only: where it describes client behaviour, that behaviour exists in code and is cited by file and symbol.
+
+Every field name **and every dynamic** below was verified against the real code on both sides — `controller/UserNewsContainerController.java`, `service/UserNewsContainerService.java`, `model/dto/Container*.java`, `controller/SearchController.java` (`articlesOf`, `giveMeArrayOfLinks`), `util/ArticleImageCache.java`, `service/ThemeRefreshService.java`, `service/CleanupService.java` here; `src/components/Item.js`, `src/components/SocialMediaListRender.js`, `src/components/CardConfigPopup.js`, `src/components/Home.js`, `src/services/usercontainer.service.js` there — **not** relayed from any planning-stage spec. Where this file and an earlier `bridge` spec disagree, this file is right. Re-checked in full on 2026-10-11, the `linkspreview` cycle.
 
 Frontend work runs that repo's own six-stage loop: start at its `planner`, apply its confirmation gate, then `builder`.
 
@@ -30,7 +32,9 @@ Both params optional. Returns `200` always — never 404, never an error for an 
     { "kind": "PLATFORM", "name": "Twitter", "position": 0 },
     { "kind": "THEME", "name": "AI", "position": 20, "id": 42,
       "news": [ ], "last_update": "Sat Oct 10 17:06:51 CEST 2026",
-      "description": "", "website": null, "linkspreview": [] }
+      "description": "", "website": null,
+      "linkspreview": [ { "title": "…", "url": "https://publisher.example/a",
+                          "image": "https://publisher.example/og.jpg", "timeago": "3 hours ago" } ] }
   ] }
 ```
 
@@ -131,11 +135,11 @@ The `Authorization: Bearer` header from `authHeaderWithJSON()` is sent but **ign
 
 The API owns **order and membership**. The client owns **icons and background images**. Neither crosses: the API never sends an icon name, asset path or colour.
 
-Three things to add for `kind === "THEME"`:
+Three things were needed on the client for `kind === "THEME"`. All three are **implemented** in `916f399`, recorded here because the division of labour rests on them:
 
-1. **Destructure `kind`** in `SocialMediaNews` and `SocialMediaNewsPreview` — the components this feature calls "SocialMediaCard". There is no file by that name.
-2. **Icon fallback.** `Logo` is a `switch (name)` whose `default` returns `<></>`, so a theme renders no icon. Add an explicit THEME branch with a generic icon. **Do not** extend the `name` switch — a theme called "AI" must never accidentally match a platform case.
-3. **No background image for THEME.** `Image` builds `/<name.toLowerCase()>-image-<theme>.png`, so a theme would request `/ai-image-dark.png` and 404. Return early for THEME before the path is constructed, or use a gradient placeholder.
+1. **`kind` is destructured** in `SocialMediaNews` (`Item.js:104`) and `SocialMediaNewsPreview` (`:255`, `:258`) — the components this feature calls "SocialMediaCard". There is no file by that name.
+2. **Icon.** `Logo` now takes a `kind` prop and returns `<></>` for THEME *before* the `switch (name)` (`Item.js:552-561`), so a theme called "AI" can never fall into a platform case. **Deliberate deviation from the original spec**, which asked for a generic icon: the client chose no icon at all. Icons are client-owned, so this is its call.
+3. **No background image for THEME.** `Image` builds `/<name.toLowerCase()>-image-<theme>.png`, which would 404 for a theme, so the call site is guarded by `isTheme ? <></> : <Image … />` (`Item.js:398`). Layouts 3 and 4 (description-only, image-only) are additionally folded back to layout 1 for a theme (`:192`, `:351`), and the `InfoIcon` that was the only way to reach layout 3 is no longer rendered on a theme card (`8b495af`).
 
 Also: `website` is `null` for themes, so prefer skipping the `<a>` wrapper over rendering a non-clickable link; `description` is `""`.
 
@@ -162,10 +166,31 @@ Matching is **exact-case** on `name`. The casing is load-bearing — `Linkedin` 
 
 ---
 
-## Two wire details that bite if assumed otherwise
+## `linkspreview` — the preview carousel
+
+Built by `SearchController.giveMeArrayOfLinks` (`:796-837`), the same function the 20 platform cards go through, so an entry's shape is **identical to a platform entry's**: exactly these **four keys** — `title`, `url`, `image`, `timeago` (projected at `:824-827`). Nothing else: no `publishedat`, no `type`, no `id`. **Object key order is not guaranteed** and must not be relied on: `net.minidev.json.JSONObject` extends `HashMap`, so these serialise in hash order (observed: `image, timeago, title, url`) — for platform cards too, since it is the same function. Read by name. Values are strings, with one caveat: the projection uses `getAsString`, so an upstream feed item with no title would yield `"title": null`. Not reachable from feeds `articlesOf` writes, which always set one.
+
+```json
+{ "title": "…", "url": "https://publisher.example/a",
+  "image": "https://publisher.example/og.jpg", "timeago": "3 hours ago" }
+```
+
+**A non-empty `linkspreview` is what selects the card's render branch.** That is a contract-level fact now, not a frontend detail: at `Item.js:379` and `:423` a non-empty array renders the Swiper image carousel plus the "See More" button, and an empty one falls through to the text article list (or "Updating…" when `news` is empty too). So this array's contents — which move with no user action — decide which of two visibly different cards the user sees. Intended. (Only in `SocialMediaNewsPreview`; `SocialMediaNews` never reads `linkspreview`, and which of the two renders is `previewswitch`, `SocialMediaListRender.js:485`.)
+
+The **shape** matches a platform's. The **dynamics** do not:
+
+- **A theme's array is recomputed on every read**, from the already-populated `article_image` cache — no new fetch, no proxy spend. A platform's is a snapshot taken at fetch time and returned with that fetch's response.
+- **A theme's array can never dangle.** It is derived from the same feed that ships as `news` in the same response, so every entry's `url` matches a `news` entry — exactly what `Item.js:383-384` relies on to merge `publishedat` in for `NewsSaveButton`. A platform's array can dangle; a theme's cannot. *Backend builder: derive it from the same parsed feed object you put into `news`, not from a second read of the block, or this stops being true.*
+- **It can be shorter than the platform equivalent, and it can be empty.** Only articles that were scanned **and** yielded a reachable image appear; an article whose `url` is missing, blank or still a Google News redirect is skipped (`:805-807`), as on the platform path. On a cold cache the array is `[]` — a legitimate state, not an error.
+- **Its length is bounded by the scan, not by the feed.** A theme's own fetch scans only the first `InfoMint.NUMBER_OF_PREVIEW_IMAGES_FOR_ENGLISH` (20, English) / `NUMBER_OF_PREVIEW_IMAGES` (11, every other language) articles of its feed (`SearchController.articlesOf:721-740`), so an entry past that point appears only if another feed happened to scan the same article. Never assume a count.
+- **The 72h blink.** `CleanupService` purges `article_image` rows whose `checked` is older than 72h and that are not behind a still-pinned article, and a cache **hit** does not refresh `checked` (`ArticleImageCache:124-136`). An article that sits in a theme's feed for more than 72h therefore loses its preview at the purge and regains it after the next fetch re-scans it: a card can flip between carousel and text list across reads. Platform cards share this property. Deliberately not mitigated this cycle.
+
+---
+
+## Wire details that bite if assumed otherwise
 
 - **`position` is presentation order, never an identifier.** It is the dense index of the **language-filtered** list, so the same stored row reports different positions in different languages (stored 22, wire 20 in one verified run). Render in array order; do not sort by it, persist it, or key off it.
-- **`last_update` moves between reads, with no user action.** A scheduled job re-fetches each live theme's news on a 30-minute cadence (anything older than an hour), so a theme's `news` array and `last_update` change over time exactly as the 20 platform cards do. Do not treat a theme payload as immutable after create, do not cache one indefinitely, and do not key anything off `last_update`.
+- **`last_update` moves between reads, with no user action.** `ThemeRefreshService` re-fetches stale themes (block older than an hour) on a 30-minute tick, **at most five per tick**, oldest-first with never-fetched first — so a theme's `news` array and `last_update` change over time as the 20 platform cards do, but on a best-effort cadence that degrades when more than five themes are stale. Do not treat a theme payload as immutable after create, do not cache one indefinitely, and do not key anything off `last_update`.
 - **`last_update` is not ISO-8601.** It is Java's `Date.toString()` form — `"Sat Oct 10 17:06:51 CEST 2026"` — identical to what platform cards from `/service/news` already carry. Do not `new Date(...)`-parse it; render as-is or not at all. (It reaches that form because the backend normalises Hibernate's `java.sql.Timestamp` into a plain `java.util.Date`; json-smart would otherwise emit `{"nanos":N}`.)
 
 ---
@@ -178,7 +203,7 @@ When `!authenticated`, **do not call `/mycontainers` at all** — there is no uu
 
 ## Create latency
 
-`POST /container` does a **live Google News fetch** for a theme nobody has created before: a proxy-liveness loop (up to 5s connect + 10s read each) plus an RSS fetch (10s + 15s). There is no server-side cap. A theme another user already created is served from the shared cache and returns fast.
+`POST /container` does a **live Google News fetch** for a theme nobody has created before: a proxy-liveness loop (up to 5s connect + 10s read each) plus an RSS fetch (10s + 15s). There is no server-side cap. A theme whose `NewsBlock` is younger than `onelike.containers.block-max-age-ms` (1h) is served from that shared block and returns fast — including a theme another user created. An **older** block is re-fetched live, so "this theme already exists" does not by itself mean "this create is fast".
 
 - Client timeout **60 s** via `AbortController`.
 - Show `DraggableLoadingPopup` (already imported in `SocialMediaListRender.js`, exported from `SpaceItem.js`) and disable the create button while in flight.
@@ -189,8 +214,8 @@ When `!authenticated`, **do not call `/mycontainers` at all** — there is no uu
 
 ## Known backend behaviour — not bugs
 
-- **`linkspreview` is always `[]`** for theme cards in phase 1. Render it defensively (the existing code already guards on `length !== 0`). Staying defensive means a future backend change needs no second contract pass.
-- **Themes do not refresh yet.** A theme's articles are frozen at creation time. That is the next backend cycle and needs no frontend change.
+- **`linkspreview` is live for theme cards** as of the 2026-10-11 cycle — it is no longer always `[]`. See its own section above for the entry shape and the dynamics. The frontend's existing `length !== 0` guards (`Item.js:379`, `:423`) are precisely what makes that a backend-only release; keep them.
+- **A create can answer with an empty or stale theme even when the proxies are healthy.** `loadThemeContent` takes an in-flight guard keyed on title + language (`UserNewsContainerService.java:227`), so a create that races the refresh tick skips the fetch and returns whatever the block currently holds — possibly nothing. `news: []` remains a legitimate success.
 - **A reorder in one language pushes the other languages' themes to the end of their own view**, and platform order is global across all languages. Verified lossless — nothing is ever deleted. Per-language ordering is a deliberate phase-2 candidate.
 
 ---
@@ -199,8 +224,10 @@ When `!authenticated`, **do not call `/mycontainers` at all** — there is no uu
 
 From a read of the frontend during contract work. **Re-locate by symbol; line numbers may have shifted.**
 
-- `src/components/SocialMediaListRender.js` — the `data=` prop passed to `CustomPagination`, the `getAllNews` batch dispatch, the `lin` / `u` / `authenticated` selectors, the existing `DraggableLoadingPopup` import
-- `src/components/Item.js` — `SocialMediaNews`, `SocialMediaNewsPreview`, the `Logo` and `Image` switches and their call sites
-- `src/services/newspin.service.js`, `src/actions/newspin.actions.js`, `src/reducers/newspin.reducer.js` — the pattern to mirror for a new `usercontainer.*` trio
+- `src/components/SocialMediaListRender.js` — the containers/news merge (`mergedSocialmedias`), the `data=` prop passed to `CustomPagination`, the `getMyContainers` fetch effect, the `previewswitch` choice of render component
+- `src/components/Item.js` — `SocialMediaNews`, `SocialMediaNewsPreview`, the `linkspreview` carousel branch and its `news`-by-`url` merge, `Logo` / `Image`, `NewsSaveButton.handlePin`
+- `src/components/CardConfigPopup.js` — create / delete / reorder UI, `toRows` (what keeps `news[]` and `linkspreview[]` out of the reorder payload), the server-echo reseed guard
+- `src/services/usercontainer.service.js`, `src/actions/usercontainer.actions.js`, `src/reducers/usercontainer.reducer.js` — the implemented trio, modelled on `newspin.*`
+- `src/components/Home.js` — the 20-minute tick that re-fetches `/mycontainers`; `src/components/Switch.js` — the "Load News" button that does the same
 - `src/helpers/auth-header.js` — `authHeaderWithJSON()`
 - `src/components/SpaceItem.js` — where `DraggableLoadingPopup` is exported from

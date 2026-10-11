@@ -52,6 +52,10 @@ The user is the gate authority and never needs approval to change their own mind
 
 A parked plan is carried by `manager` as a **human-only actions** row (status: parked, reason unknown), never as an ordinary backlog row. That misclassification is why the test-isolation item survived four cycles: as a backlog row it competed with features and lost every time, when one question would have unblocked it.
 
+## Retiring a human-only row
+
+When the user retires a human-only action — "I manage that myself", "that is not a concern" — **record it in `LEARNINGS.md` as a constraint, with their reason, rather than silently dropping it.** A row the orchestrator deletes lives only in its own context, and `LEARNINGS.md` is the only artefact the next cycle’s `manager` re-reads: drop it and the same row is raised again next cycle. Recording it is also not re-escalating it — a retired row is a settled constraint, not an open question, and should never reappear in the backlog or the human-only table.
+
 ## Permission denials
 
 A denied tool call is a decision, not an obstacle. **No stage — and not the orchestrating assistant — may route around a permission denial on another agent’s behalf**, even when the blocked action was authorised in conversation a moment earlier. Doing so launders a decision that belongs to the user.
@@ -70,9 +74,11 @@ A cycle is not closed until its work is committed, or the human-only actions tab
 
 The orchestrating assistant is not one of the six stages and has no definition file, so nothing else binds it. **Its own measurements and evidence claims meet the same bar it imposes on `planner` and `verifier`.**
 
-Before quoting a number or citing a command as evidence, **state what the output would look like if the claim were false.** If it would look identical, the method cannot support the claim. Two real examples, one cycle apart, both the orchestrator’s: `git diff --stat` cannot see an untracked file, so it cannot show that a fix pass touched only that file; `information_schema.TABLES.TABLE_ROWS` is an InnoDB estimate, so it cannot serve as a row-count baseline.
+Before quoting a number or citing a command as evidence, **state what the output would look like if the claim were false.** If it would look identical, the method cannot support the claim. Four real examples, one per cycle, all the orchestrator’s: `information_schema.TABLES.TABLE_ROWS` is an InnoDB estimate, so it cannot serve as a row-count baseline; `git diff --stat` cannot see an untracked file, so it cannot show that a fix pass touched only that file; a `performance_schema` digest is filed under the connection’s default schema, so it cannot alone show which tables were touched; `grep -c $'\r'` inside `"$( … )"` reported 233 CR lines on a pure-LF file.
 
-Any number the orchestrator measures and carries into the gate is a **baseline**: label the method that produced it and hand it to `verifier` for re-derivation, exactly as `planner`’s numbers are.
+**Write it as a claim row, not a sentence: `number | instrument | what this instrument cannot see`.** The third column is the instrument’s **blind spot** — not the claim restated in the instrument’s own units. "If my claim were false the deletion count would be non-zero" is the failure to avoid: it restates the instrument instead of naming what the instrument is blind to, and it was written unprompted, in good faith, and was wrong — because `git diff --numstat` cannot show a *method* is byte-identical at all. **If the third column cannot be filled, the claim is blocked at the point of writing it.**
+
+A self-written falsifier comes from the same reasoning that chose the instrument, so it reads plausible while being empty. The mechanism that has actually worked every time is **adversarial re-derivation with a *different* instrument** by `verifier`: `TABLE_ROWS`→`SELECT COUNT(*)`, `--stat`→`git status` plus a content compare, `--numstat`→md5 of brace-matched method bodies, the digest rule→the three-part claim. So any number the orchestrator measures and carries into the gate, into a verdict, or into a `LEARNINGS.md` entry is a **baseline**: label its instrument and hand it to `verifier`, exactly as `planner`’s numbers are.
 
 ## Cross-repo work
 

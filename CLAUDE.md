@@ -20,7 +20,7 @@ Organized by layer, single package `com.onelike.app`, everything flat within eac
 - `configuration/`, `support/`, `util/` — infra glue, email helpers, static helpers
 - Per-user Social News cards live in `UserNewsContainerController`/`UserNewsContainerService`/`model/UserNewsContainer`, over the 20 built-in platform names in `util/SocialMediaPlatforms.ALL` (the single source of that list, also used by `SearchController`'s feed job)
 
-No `model/dto` package exists yet in this repo (unlike the sibling `onelike-service-jx`, which has one).
+`model/dto/` holds the request DTOs (`PinDTO`, `ContainerDTO`, `ContainerDeleteDTO`, `ContainerOrderDTO`, `ContainerOrderItem`) — same package as the sibling `onelike-service-jx`'s.
 
 ## Conventions to follow
 
