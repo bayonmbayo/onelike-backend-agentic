@@ -36,7 +36,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * The Social News cards of one signed-in user: the 20 built-in platforms plus
  * the user's own themes ("AI", "Crypto"), in the user's own order.
  *
- * Three deliberate properties of this service:
+ * Four deliberate properties of this service:
  *
  * 1. Reads never write. A user who has never customised anything has no rows at
  *    all and still gets the 20 defaults back (seeded:false), and a read also
@@ -58,6 +58,24 @@ import java.util.concurrent.ConcurrentHashMap;
  *    every language and are shared by all of them - including their order.
  *    The theme allowance is global, not per language: five English themes plus
  *    five German ones are ten, however they are spread.
+ *
+ * 4. A newly created theme is inserted at the FRONT - stored position 0, ahead
+ *    of all 20 platforms, with every other row of that user shifted +1 - and
+ *    that happens AT CREATE TIME ONLY. Multiple themes therefore read
+ *    newest-first UNTIL THE USER SAVES AN ORDER, which falls out of the same
+ *    rule rather than being a second one. "First among the themes, after the platforms" was rejected because it
+ *    is not well defined: once a user has reordered, platforms and themes
+ *    interleave in one dense position sequence with no boundary to insert at.
+ *    Index 0 is the only rule that survives a reorder.
+ *
+ *    Nothing re-asserts index 0 on a READ. An order saved through reorder
+ *    (POST /containers/order) overwrites every position wholesale and wins
+ *    permanently; it is never re-derived, re-sorted or corrected afterwards. So
+ *    there is NO flag recording "this user has reordered" and none is needed -
+ *    the stored positions are the whole state. A read-time sort was rejected
+ *    for exactly that reason: it would silently fight a saved order with no way
+ *    to tell the two states apart. The accepted consequence is that until a
+ *    user reorders, their own cards outrank all 20 built-ins.
  *
  * The allowance itself is PER USER, not a fixed ten: the nullable
  * user.themequota column, which an admin edits by hand with raw SQL. NULL
@@ -245,6 +263,27 @@ public class UserNewsContainerService {
      * a client that disables its Add button from used >= allowed is correct
      * immediately with no re-fetch.
      *
+     * The new row lands at stored position 0, ahead of all 20 platforms, and
+     * every other row of this user shifts +1 in the same saveAll. So this
+     * answers container.position 0 - not 20 - and the next read of the same
+     * language returns the new card as containers[0]. Several themes therefore
+     * read newest-first until the user saves an order.
+     *
+     * That front-insert is WRITE TIME ONLY, and this method is the only place
+     * it happens. An order the user has saved through reorder wins permanently:
+     * no read re-asserts index 0, nothing re-derives it, and no flag
+     * distinguishes "has reordered" from "has not" because none is needed - the
+     * stored positions are the whole state.
+     *
+     * created:false moves NOTHING. A duplicate title answers the existing
+     * container at its existing position and is not re-inserted at 0; that
+     * branch returns above, before any position work.
+     *
+     * The allowance check also runs before any position work, so a 409 writes
+     * no container row at all - not even the 20 defaults for a never-seeded
+     * user (the identity upsert above has already happened either way, as it
+     * has on every other branch).
+     *
      * @param title the already trimmed and validated title
      */
     public JSONObject createContainer(ContainerDTO containerDTO, String title) throws Exception {
@@ -274,12 +313,18 @@ public class UserNewsContainerService {
         }
 
         List<UserNewsContainer> stored = containerRepository.findByUserOrderByPositionAsc(user);
-        int position;
         if (stored.isEmpty()) {
             seedDefaults(user, language);
-            position = SocialMediaPlatforms.ALL.size();
-        } else {
-            position = nextPosition(stored);
+            // Re-reading is MANDATORY, not a tidy-up. seedDefaults writes the 20
+            // platforms at 0-19 in its own saveAll, but `stored` is still the
+            // pre-seed empty list, so without this line `ordered` is [the new
+            // row] alone, densify gives it position 0, and the saveAll commits
+            // it next to a Twitter that is ALSO at 0.
+            // findByUserOrderByPositionAsc orders by position only, so that tie
+            // is unspecified and the new card renders at wire index 0 OR 1 at
+            // random - on a brand-new user's very first create, the single most
+            // common path through this method.
+            stored = containerRepository.findByUserOrderByPositionAsc(user);
         }
 
         UserNewsContainer container = new UserNewsContainer();
@@ -287,10 +332,33 @@ public class UserNewsContainerService {
         container.setKind(KIND_THEME);
         container.setName(title);
         container.setNamekey(namekey);
-        container.setPosition(position);
         container.setLanguage(language);
         container.setCreatedat(new Date());
-        containerRepository.save(container);
+
+        // The front-insert: the new theme ahead of EVERYTHING, every other row
+        // of this user shifted +1, in a SINGLE saveAll - which
+        // SimpleJpaRepository already runs in a transaction of its own, so the
+        // new row and the shift commit together with no annotation here. This
+        // method must NOT be @Transactional: it calls loadThemeContent, which
+        // can spend a minute on a live fetch and would hold a pooled connection
+        // across it. Nor may the write move into a private @Transactional
+        // helper - self-invocation bypasses the proxy and the annotation would
+        // do nothing at all (the getAllFilterNews trap).
+        //
+        // No setPosition above on purpose: densify's guard is
+        // "position == null || position != i", so a null position is assigned 0
+        // AND stamped updatedat, where a pre-set 0 would skip the stamp. No wire
+        // difference either way -- but NOT because last_update falls back to
+        // createdat: densify's stamp makes updatedat non-null, so themeJson
+        // picks updatedat. Both are in-memory Dates set in the same call, and
+        // wireDate renders them identically (measured: create echo and
+        // read-back both "Mon Oct 12 00:55:17 CEST 2026"). So this is still the
+        // version with one fewer thing to keep in sync.
+        List<UserNewsContainer> ordered = new ArrayList<>();
+        ordered.add(container);
+        ordered.addAll(stored);
+        densify(ordered);
+        containerRepository.saveAll(ordered);
 
         loadThemeContent(title, language);
 
@@ -602,16 +670,6 @@ public class UserNewsContainerService {
                 container.setUpdatedat(new Date());
             }
         }
-    }
-
-    private int nextPosition(List<UserNewsContainer> containers) {
-        int max = -1;
-        for (UserNewsContainer container : containers) {
-            if (container.getPosition() != null && container.getPosition() > max) {
-                max = container.getPosition();
-            }
-        }
-        return max + 1;
     }
 
     private int positionOf(UserNewsContainer container) {

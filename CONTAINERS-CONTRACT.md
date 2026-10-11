@@ -4,15 +4,21 @@ The contract the backend implements and the `onelike-agentic` frontend builds ag
 
 Backend phase 1 is **built, verified and committed** (`c69c7e7`). The 30-minute theme refresh landed in `555e74f`. In the current cycle a theme's `linkspreview` stops being empty. All four endpoints work live and the dev schema is correct. Nothing on the backend blocks the frontend.
 
-The frontend side is **built and committed** too — `onelike-agentic` at `916f399`, via `574720a`, `0a90b62`, `8b495af`. This file is therefore no longer a forward spec for one side only: where it describes client behaviour, that behaviour exists in code and is cited by file and symbol.
+## Sibling state — one reading, one stamp
+
+**As of the `2026-10-12` cycle** (the loop's own unit: `LEARNINGS.md` labels two distinct cycles "2026-10-11 (fifth)" and "(sixth)", so a bare date cannot identify a reading).
+
+- **Backend** (`onelike-backend-agentic`, `master`): phase 1, the 30-minute refresh, `linkspreview`, the per-user theme allowance and the index-0 front-insert are all built and verified; `themes` is live in production. Nothing on the backend blocks the frontend.
+- **Frontend** (`onelike-agentic`, branch `feature/theme-allowance-ui`): HEAD `c9ddd15`, **9 commits not in `origin/main`** (tip `e86fb55`; `git rev-list --count origin/main..HEAD`). The whole themes feature (`574720a`, `916f399`), the allowance half (`c9ddd15`) and the front-insert `resync()` are **written and unreleased**. `git ls-tree -r --name-only origin/main | grep -i "usercontainer\|CardConfigPopup"` returns nothing and `git merge-base --is-ancestor 574720a origin/main` exits non-zero, so **no released client is a consumer of these endpoints at all** — no Add button, no card-config popup, no request to `/mycontainers`.
+- Every client behaviour this file describes exists **in that branch's code**, cited by file and symbol. It is not what a user is running. A **code-state** claim ("the client reads this field") is measurable with `Grep` by any stage; a **release-state** claim ("users have this") is not, and must never be inferred from the first.
+- **§ *Theme allowance* is therefore half built**: the backend half landed at `d6308e3` and is live; the client half is the forward-spec part. **Delete that marker when the client half is *released*, not merely written** — and only then.
+- **Release that branch whole or not at all.** Releasing the themes commits *without* `c9ddd15`'s allowance UI would ship a flat cap of ten against a backend defaulting to 1 — enabled Add button, an up-to-a-minute wait, then a 409 carrying no `themes` to explain it. Settled at gate, 2026-10-11: the backend ships first at a default of 1, with the consequence accepted, and the consequence is **deferred to the client's release** rather than live, because nothing released consumes these endpoints.
+
+**Re-taken whole.** Per-claim datestamps were tried and produced a header that disagreed with itself (`a66cb32`/8 commits vs `c9ddd15`/9 commits, both correct on the day each was written). This block is re-measured as a unit or not at all.
 
 Every field name **and every dynamic** below was verified against the real code on both sides — `controller/UserNewsContainerController.java`, `service/UserNewsContainerService.java`, `model/dto/Container*.java`, `controller/SearchController.java` (`articlesOf`, `giveMeArrayOfLinks`), `util/ArticleImageCache.java`, `service/ThemeRefreshService.java`, `service/CleanupService.java` here; `src/components/Item.js`, `src/components/SocialMediaListRender.js`, `src/components/CardConfigPopup.js`, `src/components/Home.js`, `src/services/usercontainer.service.js` there — **not** relayed from any planning-stage spec. Where this file and an earlier `bridge` spec disagree, this file is right. Re-checked in full on 2026-10-11, the `linkspreview` cycle.
 
 Three claims about the frontend that a later read of `onelike-agentic` falsified are marked **[corrected]** where they appear, each with a parenthetical saying what was wrong — the point of this file is to be a record of *verified* claims, so a silent repair would lose the fact that the claim was once believed.
-
-One section is **forward spec, not a record of built behaviour**: § *Theme allowance*, and the `themes` object it defines on three responses. At backend `9b1165c` neither `user.themequota` nor `onelike.containers.default-themes-per-user` exists, and no response carries `themes`. The *decision* is settled (gate, 2026-10-11); the *code* is not written. Delete this paragraph when both builders have landed, and only then.
-
-**What the other side does in the window before it lands — settled at gate, 2026-10-11.** The backend ships **first and at a default of 1**, by the user's explicit decision, with the consequence accepted. So for as long as this paragraph stands, production runs this backend against a client that has **no field to read the allowance from**: `../onelike-agentic` at `a66cb32` contains zero reads of a `themes` response field, and `CardConfigPopup.js:40`'s `THEME_LIMIT = 10` still drives both the copy and the pre-emptive disable. The lived behaviour is therefore: a user allowed 1 who already holds 1 theme sees the Add button **enabled**, waits out a create that can take up to a minute, and receives a 409 carrying no `themes` to explain it — against copy promising ten. It is a confusing refusal rather than a crash, because the client already treats the 409 as authority. Nothing is wrong on the backend; the frontend half is the mitigation, and `CardConfigPopup.js:739-740` is the single most user-visible line in it.
 
 Frontend work runs that repo's own six-stage loop: start at its `planner`, apply its confirmation gate, then `builder`.
 
@@ -36,12 +42,12 @@ Both params optional. Returns `200` always — never 404, never an error for an 
 { "seeded": true,
   "themes": { "used": 1, "allowed": 1 },
   "containers": [
-    { "kind": "PLATFORM", "name": "Twitter", "position": 0 },
-    { "kind": "THEME", "name": "AI", "position": 20, "id": 42,
+    { "kind": "THEME", "name": "AI", "position": 0, "id": 42,
       "news": [ ], "last_update": "Sat Oct 10 17:06:51 CEST 2026",
       "description": "", "website": null,
       "linkspreview": [ { "title": "…", "url": "https://publisher.example/a",
-                          "image": "https://publisher.example/og.jpg", "timeago": "3 hours ago" } ] }
+                          "image": "https://publisher.example/og.jpg", "timeago": "3 hours ago" } ] },
+    { "kind": "PLATFORM", "name": "Twitter", "position": 1 }
   ] }
 ```
 
@@ -61,6 +67,16 @@ Missing, blank or unknown `uuid`, or a user with no rows → `seeded: false` plu
 Returns `{ "created": true, "container": { }, "themes": { "used": 1, "allowed": 1 } }`.
 
 `themes` is **post-insert**: a successful create answers the count that includes the row it just made, so a client that disables its Add button from `used >= allowed` is correct immediately, without a re-fetch. The `created: false` branch carries `themes` too, with the unchanged count.
+
+**A created theme lands at index 0, ahead of every platform.** The new row is written at stored `position` 0 and every other row of that user shifts +1, in a single `containerRepository.saveAll`. So a successful create answers `container.position: 0` — not 20 — and the next `GET /mycontainers` for that language returns the new card as `containers[0]`. **Multiple themes therefore read newest-first until the user saves an order**, which falls out of the same rule.
+
+Settled at gate, 2026-10-11. "First among the themes, after the platforms" was rejected as not well-defined: once a user has reordered, platforms and themes interleave in one dense `position` sequence with no boundary to insert at. Index 0 is the only rule that survives a reorder. Accepted consequence: until a user reorders, their own cards outrank all 20 built-ins.
+
+**Write-time only.** `POST /containers/order` overwrites every position wholesale and wins permanently; nothing re-asserts index 0 on a read, and no flag records "this user has reordered" because none is needed. A read-time sort was rejected for exactly this reason — it would silently fight a saved order with no way to tell the two states apart.
+
+**`created: false` moves nothing.** A duplicate title returns the existing container at its existing position. It is not re-inserted at 0.
+
+**A create never changes another language's order.** `containersJson` skips a row that `isRendered` rejects *before* assigning a wire index — `continue` at `UserNewsContainerService.java:790-792`, and `result.size()` is read only on the kept branch at `:794`/`:797` — so a German theme at stored position 0 consumes no index in the English list, and Twitter is still English `position` 0. The stored sequence is one sequence shared by all languages; the rendered sequences are not coupled by it. `wirePosition` (`:682-694`) uses the same predicate, so the create response agrees with the next listing.
 
 A duplicate title for the same user *and language* returns `200` with `created: false` and the existing container — idempotent by design, not an error, so a double-submitting popup is safe.
 
@@ -105,7 +121,7 @@ Send the **complete** ordered list. Omitted rows are appended, never deleted —
 
 ## Theme allowance
 
-*Settled at gate, 2026-10-11. **Forward spec** — not built at backend `9b1165c`; see the header.*
+*Settled at gate, 2026-10-11. **Backend half built and live**: `d6308e3`, and `GET /service/mycontainers` returns `themes` in production (observed `themes: {"allowed": 1, "used": 0}` against `api.onelike.app`, 2026-10-11 23:18 +0200, reported by the frontend side rather than measured here). **The client half is the forward-spec part** — see the header.*
 
 Every user has their own theme allowance. **Default 1**, raised per person by an admin with raw SQL in the nullable `user.themequota` column, and **10 is a hard ceiling** no per-user value can exceed — enforced by the configurable `onelike.containers.max-themes-per-user`, which reads `10` in both `application.properties` and `application.prod.properties`; **no code constant pins it**, so a deployment could in principle carry another number. `NULL` means "use the configured default" — it is not the same as `0`. Read-time clamping to `[0, ceiling]` means a hand-typed `25` behaves as `10` and a negative as `0`; `0` legitimately means "no custom cards at all". **No role is read anywhere on this path** — this repo's `User` has no `role` column and the allowance is per person, not per tier.
 
@@ -169,7 +185,7 @@ The `Authorization: Bearer` header from `authHeaderWithJSON()` is sent but **ign
 
 The API owns **order and membership**. The client owns **icons and background images**. Neither crosses: the API never sends an icon name, asset path or colour.
 
-Three things were needed on the client for `kind === "THEME"`. All three are **implemented** in `916f399`, recorded here because the division of labour rests on them:
+Three things were needed on the client for `kind === "THEME"`. All three are **implemented in the `feature/theme-allowance-ui` branch** at `916f399` — written, not released (see the header) — recorded here because the division of labour rests on them:
 
 1. **`kind` is destructured** in `SocialMediaNews` (`Item.js:104`) and `SocialMediaNewsPreview` (`:255`, `:258`) — the components this feature calls "SocialMediaCard". There is no file by that name.
 2. **Icon.** `Logo` now takes a `kind` prop and returns `<></>` for THEME *before* the `switch (name)` (`Item.js:552-561`), so a theme called "AI" can never fall into a platform case. **Deliberate deviation from the original spec**, which asked for a generic icon: the client chose no icon at all. Icons are client-owned, so this is its call.
@@ -202,7 +218,7 @@ Matching is **exact-case** on `name`. The casing is load-bearing — `Linkedin` 
 
 ## `linkspreview` — the preview carousel
 
-Built by `SearchController.giveMeArrayOfLinks` (`:796-837`), the same function the 20 platform cards go through, so an entry's shape is **identical to a platform entry's**: exactly these **four keys** — `title`, `url`, `image`, `timeago` (projected at `:824-827`). Nothing else: no `publishedat`, no `type`, no `id`. **Object key order is not guaranteed** and must not be relied on: `net.minidev.json.JSONObject` extends `HashMap`, so these serialise in hash order (observed: `image, timeago, title, url`) — for platform cards too, since it is the same function. Read by name. Values are strings, with one caveat: the projection uses `getAsString`, so an upstream feed item with no title would yield `"title": null`. Not reachable from feeds `articlesOf` writes, which always set one.
+Built by `SearchController.giveMeArrayOfLinks` (declared `:845`), the same function the 20 platform cards go through, so an entry's shape is **identical to a platform entry's**: exactly these **four keys** — `title`, `url`, `image`, `timeago` (projected at `:873-876`). Nothing else: no `publishedat`, no `type`, no `id`. **Object key order is not guaranteed** and must not be relied on: `net.minidev.json.JSONObject` extends `HashMap`, so these serialise in hash order (observed: `image, timeago, title, url`) — for platform cards too, since it is the same function. Read by name. Values are strings, with one caveat: the projection uses `getAsString`, so an upstream feed item with no title would yield `"title": null`. Not reachable from feeds `articlesOf` writes, which always set one.
 
 ```json
 { "title": "…", "url": "https://publisher.example/a",
@@ -215,9 +231,9 @@ The **shape** matches a platform's. The **dynamics** do not:
 
 - **A theme's array is recomputed on every read**, from the already-populated `article_image` cache — no new fetch, no proxy spend. A platform's is a snapshot taken at fetch time and returned with that fetch's response.
 - **A theme's array can never dangle.** It is derived from the same feed that ships as `news` in the same response, so every entry's `url` matches a `news` entry — exactly what `Item.js:383-384` relies on to merge `publishedat` in for `NewsSaveButton`. A platform's array can dangle; a theme's cannot. *Backend builder: derive it from the same parsed feed object you put into `news`, not from a second read of the block, or this stops being true.*
-- **It can be shorter than the platform equivalent, and it can be empty.** Only articles that were scanned **and** yielded a reachable image appear; an article whose `url` is missing, blank or still a Google News redirect is skipped (`:805-807`), as on the platform path. On a cold cache the array is `[]` — a legitimate state, not an error.
-- **Its length is bounded by the scan, not by the feed.** A theme's own fetch scans only the first `InfoMint.NUMBER_OF_PREVIEW_IMAGES_FOR_ENGLISH` (20, English) / `NUMBER_OF_PREVIEW_IMAGES` (11, every other language) articles of its feed (`SearchController.articlesOf:721-740`), so an entry past that point appears only if another feed happened to scan the same article. Never assume a count.
-- **The 72h blink.** `CleanupService` purges `article_image` rows whose `checked` is older than 72h and that are not behind a still-pinned article, and a cache **hit** does not refresh `checked` (`ArticleImageCache:124-136`). An article that sits in a theme's feed for more than 72h therefore loses its preview at the purge and regains it after the next fetch re-scans it: a card can flip between carousel and text list across reads. Platform cards share this property. Deliberately not mitigated this cycle.
+- **It can be shorter than the platform equivalent, and it can be empty.** Only articles that were scanned **and** yielded a reachable image appear; an article whose `url` is missing, blank or still a Google News redirect is skipped (`:854-855`), as on the platform path. On a cold cache the array is `[]` — a legitimate state, not an error.
+- **Its length is bounded by the scan, not by the feed.** A theme's own fetch scans only the first `InfoMint.NUMBER_OF_PREVIEW_IMAGES_FOR_ENGLISH` (20, English) / `NUMBER_OF_PREVIEW_IMAGES` (11, every other language) articles of its feed (`SearchController.articlesOf`, selected at `:735-740`), so an entry past that point appears only if another feed happened to scan the same article. Never assume a count.
+- **The 72h blink.** `CleanupService` purges `article_image` rows whose `checked` is older than 72h and that are not behind a still-pinned article, and a cache **hit** does not refresh `checked` (`ArticleImageCache:128-142`). An article that sits in a theme's feed for more than 72h therefore loses its preview at the purge and regains it after the next fetch re-scans it: a card can flip between carousel and text list across reads. Platform cards share this property. Deliberately not mitigated this cycle.
 
 ---
 
@@ -226,6 +242,7 @@ The **shape** matches a platform's. The **dynamics** do not:
 - **`position` is presentation order, never an identifier.** It is the dense index of the **language-filtered** list, so the same stored row reports different positions in different languages (stored 22, wire 20 in one verified run). Render in array order; do not sort by it, persist it, or key off it.
 - **`last_update` moves between reads, with no user action.** `ThemeRefreshService` re-fetches stale themes (block older than an hour) on a 30-minute tick, **at most five per tick**, oldest-first with never-fetched first — so a theme's `news` array and `last_update` change over time as the 20 platform cards do, but on a best-effort cadence that degrades when more than five themes are stale. Do not treat a theme payload as immutable after create, do not cache one indefinitely, and do not key anything off `last_update`.
 - **`last_update` is not ISO-8601.** It is Java's `Date.toString()` form — `"Sat Oct 10 17:06:51 CEST 2026"` — identical to what platform cards from `/service/news` already carry. Do not `new Date(...)`-parse it; render as-is or not at all. (It reaches that form because the backend normalises Hibernate's `java.sql.Timestamp` into a plain `java.util.Date`; json-smart would otherwise emit `{"nanos":N}`.)
+- **Every create shifts every other row of that user — and for a theme with no `NewsBlock` yet, that moves its `last_update` forward with no fetch having happened.** The shift is **universal on the create path**, not occasional: the front-insert moves every other row of that user by +1, so `densify` stamps `updatedat` on each of them (`UserNewsContainerService.java:664-667`). Whether it reaches the wire is the conditional half. For a theme whose `NewsBlock` does not exist yet, `last_update` is `updatedat ?? createdat` (`:843-845`) — so creating card B **does** make card A report a newer `last_update`. Bounded on both sides: once a block exists, `last_update` is the block's own date (`:871`, `:874`) and the bump never reaches the wire, and `platformJson` carries no `last_update` at all (`:814-820`), so the 20 platform rows' bumps are invisible. **So: the stamp is universal, the wire effect is reachable only for a theme whose own create skipped or failed its fetch.** This is a change to a pinned field's *dynamics*, which § *Cross-repo work* item 5 treats as invalidating a spec just as a shape change would — hence its presence here rather than in a commit message.
 
 ---
 
@@ -249,8 +266,20 @@ When `!authenticated`, **do not call `/mycontainers` at all** — there is no uu
 ## Known backend behaviour — not bugs
 
 - **`linkspreview` is live for theme cards** as of the 2026-10-11 cycle — it is no longer always `[]`. See its own section above for the entry shape and the dynamics. The frontend's existing `length !== 0` guards (`Item.js:379`, `:423`) are precisely what makes that a backend-only release; keep them.
-- **A create can answer with an empty or stale theme even when the proxies are healthy.** `loadThemeContent` takes an in-flight guard keyed on title + language (`UserNewsContainerService.java:227`), so a create that races the refresh tick skips the fetch and returns whatever the block currently holds — possibly nothing. `news: []` remains a legitimate success.
+- **A create can answer with an empty or stale theme even when the proxies are healthy.** `loadThemeContent` takes an in-flight guard keyed on title + language (`UserNewsContainerService.java:388`), so a create that races the refresh tick skips the fetch and returns whatever the block currently holds — possibly nothing. `news: []` remains a legitimate success.
 - **A reorder in one language pushes the other languages' themes to the end of their own view**, and platform order is global across all languages. Verified lossless — nothing is ever deleted. Per-language ordering is a deliberate phase-2 candidate.
+
+---
+
+## Deploy ordering
+
+Answered in both directions, per `AGENTIC-LOOP.md` § *Cross-repo work* item 6, each against the other side's **deployed** code.
+
+**Backend first: safe, and for a stronger reason than "the client is not blocked".** There is no deployed consumer of these four endpoints to regress — see the header for the `git ls-tree` and `merge-base` measurements. Even against the unreleased client it would be safe: that client appends the created container locally (`usercontainer.reducer.js`, `upsertContainer` → `return [...list, container]`) and reads no `position` from any container (`grep -rn "\.position\b\|position:" src --include=*.js` matches only CSS values and toast props — zero API reads), so `position` changing 20 → 0 is inert and the post-create view is identical to today.
+
+**Frontend first: visibly worse, and the asymmetric case.** A client that prepends locally against the current backend shows the new card at the front and then watches it **jump to the end** on the next `/mycontainers` — `Home.js`'s 20-minute tick and `Switch.js`'s "Load News" both re-fetch, so the jump is not hypothetical and needs no user action. The client-side fix in this cycle is a `resync()` on the create-success path, which against the current backend re-reads an append and so merely confirms today's behaviour: harmless, but it buys nothing until the backend lands.
+
+**Therefore: backend first.** The client change is a no-op improvement before the backend ships and the whole point of the cycle after.
 
 ---
 
