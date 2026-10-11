@@ -35,6 +35,10 @@ flowchart LR
 
 Identical rule to the frontend: every time `planner` produces a new plan, the orchestrating assistant must present it to the user in plain terms and get explicit confirmation before `builder` starts. Never assume a "yes." If the user gives a partial/by-item selection, scope `builder` to exactly what was confirmed — nothing more.
 
+**Any answer the user gives at the gate that settles an open question in a pinned spec is written into that spec, marked settled-at-gate, before `builder` is invoked.** An answer that lives only in the orchestrator’s context is lost to every later stage: in one cycle `manager` re-raised two such answers as still-open contract questions, and they had to be recorded after the fact. This is the same failure as a falsified claim left in its source artefact — see § *Falsifying a claim in an artefact*.
+
+The orchestrator may also **transcribe** a factual correction into comments or doc text — a javadoc paragraph, a spec line — when the wording comes verbatim from a stage’s measurement and **no executable token changes**. That is the same authority `bridge.md` grants for the contract file, extended to source comments. Two conditions: evidence the claim with the sound instrument for it (md5 of the brace-matched method body, per `CLAUDE.md` § *Measurement instruments*) rather than asserting "I changed only the comment", and record it in the cycle’s `LEARNINGS.md` entry. Anything requiring judgement about what the code should do is a `builder` fix pass.
+
 ### Change after confirmation
 
 The user is the gate authority and never needs approval to change their own mind mid-cycle. But the gate exists for two things — consent *and* a grounding pass — and a change that skips the grounding pass costs the cycle. So:
@@ -70,6 +74,12 @@ A cycle is not closed until its work is committed, or the human-only actions tab
 
 **Who, and with what authority.** The orchestrating assistant commits; no subagent does. Scope is only the files in this cycle’s confirmed plan — stage the paths explicitly, never `git add -A`. Show the user the commit message. **Commit yes, push never**: pushing is always the user’s own action. Standing authorisation is **session-scoped and asked for once** — ask at the first landing of a session, then land subsequent cycles without asking again unless the user says otherwise. "The rule says cycles must be landed" is a completion criterion, not permission; do not read it as consent.
 
+## Falsifying a claim in an artefact
+
+When any stage establishes that a claim in `CLAUDE.md`, `LEARNINGS.md` or a pinned contract is **false**, writing the correction into its own output is only half the job. **Name the source: file and line of the claim being falsified.** The orchestrator then applies that edit at stage 06 alongside the process edits, under the same never-queued rule.
+
+The reason is a measured failure, not a hypothetical. One cycle’s `bridge` correctly recorded two false premises in §0 of the contract it was writing — and both had come from `CLAUDE.md`, which stayed wrong, so the same premise was positioned to re-enter the next cycle. A correction that lives only in the downstream artefact fixes one cycle; a correction written back to the source fixes all of them. `bridge`’s output format carries a **source artefact** field for exactly this.
+
 ## The orchestrator’s own claims
 
 The orchestrating assistant is not one of the six stages and has no definition file, so nothing else binds it. **Its own measurements and evidence claims meet the same bar it imposes on `planner` and `verifier`.**
@@ -80,7 +90,7 @@ There are **two** classes of failure here, and they need different fixes.
 
 **Measurement artefacts** — the instrument answers deterministically *wrong*, and **the falsifier test structurally cannot catch them.** A reading of a file’s line endings taken through `git show` reports pure LF for a CRLF file, because git hands back the LF-normalised blob; the true and the false output are *identical in shape*, so no self-written falsifier fires. A CR count taken through the `grep`/`awk` family likewise disagreed with `od -c` and `file -b`. For this class the only defence is a lookup: **check the question against `CLAUDE.md` § *Measurement instruments* before choosing the tool**, and corroborate with a second, different instrument when the claim is load-bearing and the tool is unlisted.
 
-**Write it as a claim row, not a sentence: `number | instrument | what this instrument cannot see`.** This binds not only measurements carried into a gate, but **any count asserted in prose** — in a `LEARNINGS.md` entry or in a brief to a stage. Two of this loop’s errors were exactly that: "the error is in the second entry" and "three parse sites", both countable, both stated without an instrument, both caught late by a downstream stage happening to look.
+**Write it as a claim row, not a sentence: `number | instrument | what this instrument cannot see`.** This binds every number **and every equality or identity claim** — "these two values are the same", "this file is unchanged", "this is the same secret". A stage once reported `jwt.secret` as "the same committed literal in both repos" when it had compared **placeholder names**, not values; the claim was an equality, so a rule binding only numbers let it through. It binds not only measurements carried into a gate, but **any count asserted in prose** — in a `LEARNINGS.md` entry or in a brief to a stage. Two of this loop’s errors were exactly that: "the error is in the second entry" and "three parse sites", both countable, both stated without an instrument, both caught late by a downstream stage happening to look.
 
 A claim row has **three** possible outcomes, not two: *filled and re-derived with a different instrument* (verified); *filled, but re-derivable only with the same instrument* (corroboration — say so, do not call it verified; a cryptographic fingerprint is the honest example, since no second instrument exists for a hash); or *cannot be filled* (blocked at the point of writing). The third column is the instrument’s **blind spot** — not the claim restated in the instrument’s own units. "If my claim were false the deletion count would be non-zero" is the failure to avoid: it restates the instrument instead of naming what the instrument is blind to, and it was written unprompted, in good faith, and was wrong — because `git diff --numstat` cannot show a *method* is byte-identical at all. 
 

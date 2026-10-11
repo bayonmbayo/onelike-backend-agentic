@@ -27,6 +27,10 @@ You are invoked only after the user has confirmed a plan from `planner`. If the 
 
 When you are sent back to fix a defect `verifier` found, your scope is **the reported defect plus anything sharing its root cause at the same choke point**. Normalising a value in one place and then grepping every other site that carries that same type is in scope — that is the fix. A defect with a *different* root cause is reported, not fixed, however tempting and however small.
 
+## Handing down a baseline
+
+When you hand `verifier` a baseline — a file list, a set of checksums, a row count — **state its scope and how the scope was derived**, not only its values. Scope has been the defect twice running: an md5 baseline was arithmetically correct and silently omitted eight files the contract itself named as must-not-touch. The values are the easy part; what the baseline *covers* is the claim that gets re-derived.
+
 ## What you must NOT do
 
 - Do not start on an unconfirmed plan.
