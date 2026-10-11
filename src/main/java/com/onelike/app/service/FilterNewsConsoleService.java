@@ -16,8 +16,22 @@ import java.util.Date;
 import java.util.List;
 
 /**
- * The ADMIN/MODERATOR Console behind the publisher filter: list every row, add
- * one, switch one on or off, delete one.
+ * The publisher filter's write and read logic: list every row, add one, switch
+ * one on or off, delete one.
+ *
+ * It has TWO callers, with different gates, and the name of this class names
+ * only the first of them:
+ *
+ * - FilterNewsController, the ADMIN/MODERATOR Console, token-gated by
+ *   ConsoleToken. It reaches all four methods, and createFilter's createdby is
+ *   the caller's email taken from the token's sub.
+ * - FilterNewsAgentController, an automated agent, gated by a shared API key
+ *   (AgentApiKey). It is add-only: it reaches createFilter and nothing else,
+ *   and passes the literal "agent" as createdby.
+ *
+ * So createdby is NOT always a token subject. It is one of: an email (Console),
+ * the literal "agent", or null for a row predating both paths. Anything reading
+ * it must treat it as an opaque label, not as a user identifier.
  *
  * Bodies are hand-built with net.minidev.json and returned as a String by the
  * controller, like UserNewsContainerController and the rest of the news
@@ -47,8 +61,14 @@ import java.util.List;
  * 3. Nothing here evicts the filter_news cache. That is deliberate: the only
  *    available lever, CacheService.evictCache(), is all-or-nothing and would
  *    also dump all 15 language news caches and quotes, forcing a re-read burst
- *    on the hot path. The up-to-ten-minute lag before the fetch jobs see a new
- *    row is accepted, and it is exactly what the popup copy promises.
+ *    on the hot path. No lag is introduced by that choice: the fetch path does
+ *    not read through the cache at all, because getAllFilterNews() calls
+ *    allFilterNews() unqualified and a self-invocation bypasses the caching
+ *    interceptor under proxy-mode AOP, so every run queries the database. The
+ *    real delay is the per-language job ladder - English performJob runs on a
+ *    5-minute fixedRate - not the 10-minute CacheLoader tick, which populates
+ *    an entry no read path consults. Earlier text here claimed an
+ *    up-to-ten-minute cache lag; that was wrong in both cause and magnitude.
  */
 @Slf4j
 @Service
@@ -62,8 +82,48 @@ public class FilterNewsConsoleService {
      */
     public static final int NAME_MAX_LENGTH = 120;
 
+    private static final String CODE_NAME_INVALID = "filternews.name.invalid";
+
     @Autowired
     FilterNewsRepository filterNewsRepository;
+
+    /**
+     * The one place a publisher name is trimmed and checked, for both write
+     * paths: the token-gated Console and the API-key-gated agent endpoint.
+     *
+     * It is static and takes the raw string so it can be called before any
+     * repository work and tested without a context. The three rules, and the
+     * order they run in, are exactly what the Console controller enforced
+     * inline before this method existed - a trimmed name must be non-empty, at
+     * most NAME_MAX_LENGTH characters and free of ISO control characters -
+     * because the Console's wire behaviour is pinned by tests and by
+     * CONSOLE-CONTRACT.md and must not shift.
+     *
+     * Checking after the trim is the point: " " is empty, and a name padded
+     * past 120 by whitespace is accepted at its trimmed length. A control
+     * character is rejected rather than stripped, because matching at fetch
+     * time is an exact end-anchored String.endsWith - a silently stripped
+     * character would produce a stored name that looks right in the Console and
+     * filters nothing.
+     *
+     * @return the trimmed name, which is what goes into the row
+     */
+    public static String normaliseName(String raw) throws FilterNewsException {
+        String name = raw == null ? "" : raw.trim();
+        if (name.isEmpty() || name.length() > NAME_MAX_LENGTH || hasControlCharacter(name)) {
+            throw new FilterNewsException(CODE_NAME_INVALID);
+        }
+        return name;
+    }
+
+    private static boolean hasControlCharacter(String name) {
+        for (int i = 0; i < name.length(); i++) {
+            if (Character.isISOControl(name.charAt(i))) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     /**
      * Every row, active and inactive, newest first.

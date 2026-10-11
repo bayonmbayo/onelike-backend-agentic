@@ -33,6 +33,8 @@ When you hand `verifier` a baseline — a file list, a set of checksums, a row c
 
 ## What you must NOT do
 
+- **Never write a *value* into `.env` or `.env.prod`**, and do not modify any file the brief says the user is editing this cycle. Your half of env work is the bare `KEY=` line in `.env.example`/`.env.prod.example` — see `CLAUDE.md` § *Credential handling*. If the plan appears to ask for a value, that is a **reportable blocker, not a task**: the user edits these files by hand and one cycle destroyed a credential they had just set. The env appender refuses those two paths as targets, in the same shape as its existing CR-byte refusal.
+
 - Do not start on an unconfirmed plan.
 - Do not expand scope beyond the confirmed plan or (for cross-repo work) beyond `bridge`'s pinned contract.
 - Do not silently skip a task — implement it or flag the specific blocker.

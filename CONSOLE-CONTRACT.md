@@ -2,11 +2,11 @@
 
 The contract the backend implements and the `onelike-agentic` frontend builds against, for the ADMIN/MODERATOR-only "Console" menu entry that adds a spamming publisher's name to `FilterNews`.
 
-**Backend: built and verified** (four endpoints, the token gate, and two test classes; `verifier` PASS-WITH-NOTES). **Frontend: not built.** So this is a forward spec for the frontend builder and a description of shipped behaviour on the backend side — where the two disagree, the backend code is what runs, and that is a defect in this file.
+**Backend: built and verified** (four endpoints, the token gate, and two test classes; `verifier` PASS-WITH-NOTES). A later cycle added a fifth endpoint which is **not** part of the Console and is not token-gated — see §13, and read §5 as Console-only. **Frontend: not built.** So this is a forward spec for the frontend builder and a description of shipped behaviour on the backend side — where the two disagree, the backend code is what runs, and that is a defect in this file.
 
 Every claim below was read out of real code, not relayed from the planning stage. On the backend: `model/FilterNews.java`, `repository/FilterNewsRepository.java`, `service/NewsService.java` (`allFilterNews`, `getAllFilterNews`), `service/CacheService.java`, `service/CacheLoader.java`, `controller/SearchController.java` (`isGoodNews`, `articlesOf`, `performJob`), `util/OtherTool.java` (`endsWith`), `controller/UserNewsContainerController.java`, `service/UserNewsContainerService.java` (`wireDate`), `service/ErrorService.java`, `error/ApiError.java`, `exception/ContainerException.java`, `model/dto/*`, `pom.xml`, `src/main/resources/application.properties`, `OnelikeBackendApplication.java`, plus the 15 `SearchController*` language variants. On the frontend, `onelike-agentic` at **`916f399`** (re-checked with `git rev-parse HEAD`, not taken from the handoff; working tree has one unstaged modification, `src/components/Item.js`): `src/helpers/auth-header.js`, `src/services/usercontainer.service.js`, `src/services/newspin.service.js`, `src/services/outofscope.service.js`, `src/components/Menu.js`, `src/components/Message.js`, `src/components/ProfilItem.js`, `src/components/SpaceItem.js`, `src/constants/worker.constants.js`, `.env`, and `node_modules/react-burger-menu/lib/menuFactory.js`. In the issuer repo `onelike-backend-jx2-agentic`: `src/main/java/com/onelike/app/security/JWT.java`, `properties/JWTProperties.java`, `pom.xml`. The CORS answer in §7 was resolved from Spring 6.0.11 **bytecode** (`javap -c` on `RequestMappingHandlerMapping`, `CorsConfiguration`, `DefaultCorsProcessor` out of `~/.m2`), not from a runtime observation.
 
-Four items were corrected after implementation, sourced verbatim from `verifier`'s measurements rather than re-authored: the cache premise in §9 and §11-q5, the sort key in §3, the NULL-`active` reactivate case in §4(a), the `sub` guard in §5, and the undefined-`errors` case in §10. Each is marked **[corrected]** where it appears.
+Items corrected after implementation are sourced from measurements rather than re-authored: the cache premise in §9 and §11-q5, the sort key in §3, the NULL-`active` reactivate case in §4(a), the `sub` guard in §5, the undefined-`errors` case in §10, the settled questions in §11-q3 and §11-q4, and — on 2026-10-11, against the frontend source rather than `verifier` — the role-check count and the third cloned prop in §8. Each is marked **[corrected]** where it appears, with a parenthetical saying what was wrong; no running total is given here, because the one this sentence used to carry was itself wrong.
 
 This file does not touch `CONTAINERS-CONTRACT.md`, which covers a different feature.
 
@@ -76,7 +76,7 @@ No parameters, no body. Returns every row, **active and inactive**, newest first
 
 `createdby` and `createdat` are `null` for rows that predate this feature. `active` is `true`/`false`, never null on the wire (§4 explains why it can be null in the database and what to do about it).
 
-**Do not implement this by calling `newsService.getAllFilterNews()`.** That method is `@Cacheable(value = "filter_news")` (`NewsService.java:338-342`) and delegates to `getActiveFilterNews(true)`, so it would return a possibly-ten-minutes-stale list with every inactive row missing — i.e. the Console would not show the rows it exists to manage, and a just-added row might not appear in the list the admin is looking at. Read `filterNewsRepository.findAll()` directly and sort in the service.
+**Do not implement this by calling `newsService.getAllFilterNews()`.** That method is `@Cacheable(value = "filter_news")` (`NewsService.java:338-342`) and delegates to `getActiveFilterNews(true)`, so it would return a list with every inactive row missing — i.e. the Console would not show the rows it exists to manage, and a just-added row might not appear in the list the admin is looking at. Read `filterNewsRepository.findAll()` directly and sort in the service.
 
 ### `POST /service/filternews`
 
@@ -121,7 +121,7 @@ Returns `{ "deleted": true }`. Hard delete, no soft-delete fallback — the `act
 
 **The same NULL applies on the *reactivate* path, and the comparison must tolerate it** [corrected]. A row predating this feature can hold `active IS NULL`, so the test for "already on" is `!Boolean.TRUE.equals(existing.getActive())`. `existing.getActive() == true` would unbox-NPE on such a row, and `Boolean.FALSE.equals(...)` would report it as already active and leave it off forever. Verified behaviourally: a hand-inserted `active = NULL` row and an `active = 0` row both answer `200 {"added":false,"reactivated":true}` and flip to `1`, keeping their original null `createdby`/`createdat`.
 
-**(b) The name lookup must be case-sensitive in Java, not in SQL.** Matching is case-sensitive (§2), but MySQL's default collation is case-insensitive, so a derived `findByName("the hacker news")` would return the `The Hacker News` row. Reactivating that row makes the admin believe a lowercase filter is live when it filters nothing. Do the comparison in Java with `String.equals` over `findAll()` — the table is small enough that the whole list is loaded into a cache every ten minutes already.
+**(b) The name lookup must be case-sensitive in Java, not in SQL.** Matching is case-sensitive (§2), but MySQL's default collation is case-insensitive, so a derived `findByName("the hacker news")` would return the `The Hacker News` row. Reactivating that row makes the admin believe a lowercase filter is live when it filters nothing. Do the comparison in Java with `String.equals` over `findAll()`.
 
 **(c) `createdat` is type-unstable unless normalised at one choke point.** json-smart special-cases `java.util.Date` **exactly** and writes it with `toString()`. Hibernate hands back `java.sql.Timestamp`, a subclass, which misses that branch and falls through to bean reflection, serialising as `{"nanos":63000000}`. So without normalisation the create response returns a string (in-memory `Date`) and every later read returns an object (`Timestamp` from the DB). Copy the millis into a plain `java.util.Date` on the way to the wire — the copy is required, `Timestamp.getTime()` alone does not help, because the **declared type** is what json-smart dispatches on. The precedent to copy is `UserNewsContainerService.wireDate` (`:552-554`) and its comment above it.
 
@@ -134,6 +134,8 @@ The client consequence: **`createdat` is a Java `Date.toString()` string, not IS
 ## 5. Identity and auth
 
 The caller's identity travels **only** in the `Authorization: Bearer <jwt>` header. **No request body carries uuid, email, firstname, name or displayname** — this is the one place this feature deliberately departs from the `Pin` and `Container` precedent, because the role must not be client-assertable.
+
+This section describes **the Console's four endpoints only**. A fifth endpoint on the same table authenticates with a shared API key and no token at all — see §13. Nothing in §5 applies to it.
 
 A small `@Component` helper, called as the first statement of all four controller methods:
 
@@ -206,9 +208,9 @@ So the preflight succeeds with the plain annotation and nothing extra is needed.
 
 Note that `Menu.js:2416` is **not** a menu-entry precedent despite being in the same file — it is inside the profile dialog, 1500 lines from the burger.
 
-### Which of the six role checks to copy
+### Which role check to copy
 
-**`SpaceItem.js:2726-2730`.** It is the only one of the six that combines `authenticated &&` with both role checks and renders a clickable element whose `onClick` opens a popup, which is exactly this shape:
+**`SpaceItem.js:2726-2730`** **[corrected]**. It is the only gate in the frontend that combines `authenticated &&` with both role checks and a popup-opening `onClick` **and has no owner-identity disjunct**, which is exactly this shape:
 
 ```js
 {authenticated && !outofscopespace &&
@@ -218,7 +220,7 @@ Note that `Menu.js:2416` is **not** a menu-entry precedent despite being in the 
     : null}
 ```
 
-Drop the `!outofscopespace` term, keep the rest. `Message.js:617` is the same two role checks in ternary form but without `authenticated`; `ProfilItem.js:642` and `:753` are the same minus the popup; `SpaceItem.js:637-638` is the negated form inside a handler, not a render gate; `Menu.js:2416` is ADMIN-only. In `Menu` the two bindings already exist: `authenticated` at `:161` (`loggedIn && user`), and `user` is local state kept in sync with Redux by `useEffect(() => setUser(u), [u])` at `:195-197`.
+Drop the `!outofscopespace` term, keep the rest. The near-misses: `SpaceItem.js:2732-2737` and `:2742-2747` look identical and *do* open popups, but each adds `(user && createdby && user.uuid === createdby.uuid)` as a first disjunct — copy one of those and a row's own author gets the Console, whoever they are; `Message.js:617` is the same two role checks in ternary form but without `authenticated`; `ProfilItem.js:642` and `:753` are the same minus the popup; `SpaceItem.js:637-638` is the negated form inside a handler, not a render gate; `Menu.js:2416` is ADMIN-only. (This section said `SpaceItem.js:2726-2730` was "the only one of **the six** role checks" with that shape. The structural reason above is the real one and needs no count; the count itself did not reproduce, and neither did the "ten across five files" offered as its replacement. The reproducible figure, measured 2026-10-11 with `rg "role\.includes\(" src/` in `onelike-agentic`, is **16 matching lines across 4 files** — `SpaceItem.js` 9, `Menu.js` 3, `Message.js` 2, `ProfilItem.js` 2. Corrected on 2026-10-11 against the frontend source.) In `Menu` the two bindings already exist: `authenticated` at `:161` (`loggedIn && user`), and `user` is local state kept in sync with Redux by `useEffect(() => setUser(u), [u])` at `:195-197`.
 
 `user.role` is a **string**, not an array — `ProfilRole`'s `defaultValue={user && user.role ? user.role : "USER"}` (`:2807`) feeds a `RadioGroup`. `.includes()` is therefore substring matching, which is safe here: `"ADMIN"` is not a substring of `"MODERATOR"` or `"USER"`.
 
@@ -230,12 +232,15 @@ The comment at `Menu.js:860` — "p and br must be direct Burger children (no fr
 React.Children.map(props.children, function (item, index) {
   if (item) {
     var classList = ['bm-item', props.itemClassName, item.props.className]…
+    var extraProps = { key: index, className: classList,
+                       style: getStyles('item', index, item.props.style),
+                       tabIndex: isOpen ? 0 : -1 };
     return React.cloneElement(item, extraProps);
   }
 })
 ```
 
-Two consequences. The `if (item)` guard means a conditional yielding `null` is safely skipped, so `{cond ? <p>…</p> : null}` is correct. But a conditional yielding a **Fragment** is one child: the fragment gets cloned with `className` and `style`, a Fragment ignores both, and the `<p>`/`<br/>` inside it silently lose their `bm-item` styling. It does not throw — it just renders wrong. So gate with **two separate ternaries**, one returning the `<p>` and one returning the `<br />`, or with a keyed array (`React.Children.map` flattens arrays); never with `<>…</>`.
+Two consequences. The `if (item)` guard means a conditional yielding `null` is safely skipped, so `{cond ? <p>…</p> : null}` is correct. But a conditional yielding a **Fragment** is one child: the fragment gets cloned with `key`, `className`, `style` **and `tabIndex`**, a Fragment ignores all of them, and the `<p>`/`<br/>` inside it silently lose their `bm-item` styling **and their `tabIndex: isOpen ? 0 : -1` — so a fragment-gated entry also stops being keyboard-focusable** **[corrected]**, which is an accessibility regression, not only a cosmetic one. It does not throw — it just renders wrong. (This passage named only `className` and `style`; `tabIndex` is the third cloned prop and was missing. Verified 2026-10-11 in `onelike-agentic/node_modules/react-burger-menu/lib/menuFactory.js` at v3.0.8.) So gate with **two separate ternaries**, one returning the `<p>` and one returning the `<br />`, or with a keyed array (`React.Children.map` flattens arrays); never with `<>…</>`.
 
 ### The popup trigger
 
@@ -318,7 +323,7 @@ One operational note for the backend builder: `ErrorService` calls `log.error` a
 
 Neither builder can settle these alone. Listed rather than guessed.
 
-1. **Does `api.onelike.app`'s deployed `JWT_SECRET` equal `communo.onelike.app`'s?** The HMAC-SHA512 check passed against this repo's local `.env`, which is evidence about dev only (§1). If the two deployments differ, every Console call returns 401 with a correct signature, and the symptom will look like the role-staleness fact in §5. Worth confirming in the deployment environment before the frontend builder starts debugging.
+1. **Does `api.onelike.app`'s deployed `JWT_SECRET` equal `communo.onelike.app`'s?** The HMAC-SHA512 check passed against this repo's local `.env`, which is evidence about dev only (§1). If the two deployments differ, every Console call returns 401 with a *valid* token, and the symptom will look like the role-staleness fact in §5. **This is the one open question that is undiagnosable from the client, and it is a deploy-environment check rather than a code question — do not schedule code work for it.** Measured 2026-10-11: `Bearer not.a.real.token` returns a byte-identical response to sending no `Authorization` header at all — same 401, same `filternews.unauthorized`, differing only in the random error number — so "header stripped in transit", "signature rejected" and "no header sent" cannot be told apart from outside. Confirm it in the deployment environment before the frontend builder starts debugging. (The same probe shows the four endpoints are live on `api.onelike.app`: all of them answer the app's own `{"errors":["filternews.unauthorized"]}` where a bogus sibling path under `/service` answers Boot's generic 404 with no `errors` key, so both the controller and the token gate are deployed and no local backend is needed to exercise them. Deployment state is a measurement with a shelf life, not a standing fact — re-measure rather than trust this line.)
 2. **Does anything in front of `api.onelike.app` strip `Authorization` or answer `OPTIONS` itself?** §7 settles Spring's behaviour from bytecode. It cannot settle a proxy's. This is the one part of the CORS question that genuinely must be observed rather than read.
 3. ~~**`name` maximum length.**~~ **Settled by the user at the gate: 120** [corrected]. Bridge proposed it as its own unconfirmed choice; the user confirmed it, so the frontend should mirror 120 into the input's `maxLength` without treating it as provisional. The column is an unconstrained `String`, so Hibernate makes it `VARCHAR(255)`; the neighbouring convention is `UserNewsContainerService.TITLE_MAX_LENGTH = 40`, which is too short for real publisher strings (`The Chronicle of Higher Education` is 33 and longer ones exist). 120 sits between the two.
 4. ~~**Should MODERATOR be able to hard-delete, or only ADMIN?**~~ **Settled by the user at the gate: both roles, all four endpoints, hard delete included** [corrected]. The reasoning offered and accepted: `active: false` covers the reversible case, and a moderator trusted to filter publishers is trusted to tidy the list. The frontend should render delete for both roles.
@@ -335,8 +340,8 @@ Re-locate by symbol; line numbers shift.
 - `src/main/java/com/onelike/app/service/UserNewsContainerService.java` — `wireDate` (the `Date`/`Timestamp` choke point) and its comment
 - `src/main/java/com/onelike/app/model/FilterNews.java` — add `createdby` (String) and `createdat` (Date), both nullable; no other change
 - `src/main/java/com/onelike/app/repository/FilterNewsRepository.java` — `getActiveFilterNews` stays as-is; the Console reads `findAll()`
-- `src/main/java/com/onelike/app/service/NewsService.java` — `allFilterNews` / `getAllFilterNews`, the `@Cacheable` the Console must bypass
-- `src/main/java/com/onelike/app/service/CacheService.java`, `service/CacheLoader.java` — the 10-minute eviction tick behind the §9 timing
+- `src/main/java/com/onelike/app/service/NewsService.java` — `allFilterNews` / `getAllFilterNews`, whose `@Cacheable` never applies on a read at all (unqualified self-invocation — see §9)
+- `src/main/java/com/onelike/app/service/CacheService.java`, `service/CacheLoader.java` — the 10-minute cache-refresh tick — real, but **not** behind the §9 timing: no read path consults that entry (see §9)
 - `src/main/java/com/onelike/app/controller/SearchController.java` — `isGoodNews`, and `articlesOf`'s load of the filter list
 - `src/main/java/com/onelike/app/util/OtherTool.java` — `endsWith`
 - `src/main/java/com/onelike/app/exception/ContainerException.java` — the one-line template for `FilterNewsException`
@@ -350,3 +355,63 @@ Re-locate by symbol; line numbers shift.
 - `src/helpers/auth-header.js` — `authHeaderWithJSON()`, unchanged
 - `src/constants/worker.constants.js`, `.env` — the two hosts in §1
 - `node_modules/react-burger-menu/lib/menuFactory.js` — the child-cloning code behind the fragment trap
+
+---
+
+## 13. A second write path into `filter_news` — the agent endpoint
+
+Added after the Console shipped. **This file previously implied the Console was the only way a row could be written, and that `createdby` was always a token subject. Both are now false**, so the correction belongs here rather than in a commit message.
+
+### `POST /service/filternews/agent`
+
+```json
+{ "name": "The Hacker News" }
+```
+
+Same request DTO (`FilterNewsDTO`), same validation, and the response body is **the `POST /service/filternews` body verbatim** — `{added, reactivated, filter{…}}` — because both endpoints are one call into `FilterNewsConsoleService.createFilter`. An already-present, already-active name is the same idempotent `200`.
+
+**Add-only.** There is no agent equivalent of the list, the toggle or the delete, and that is a design choice, not an omission: the key is shared and carries no identity, so a leaked key can add rows (visible in the Console and undoable there) and cannot empty the list.
+
+**`createdby` is the literal string `"agent"`** on every row this endpoint inserts — never null, never an email. So the column now holds one of three things: a Console caller's email, `"agent"`, or `null` for a row predating both paths. Read it as an opaque label and keep the frontend's existing null fallback; `"agent"` renders as-is with no frontend change.
+
+### Auth — a shared API key, not a token
+
+Not `Authorization: Bearer`. One shared key from the environment (`onelike.news.filter.apikey=${ONELIKE_NEWS_FILTER_APIKEY}`, no inline default), checked by `support/AgentApiKey` with `MessageDigest.isEqual` and both sides trimmed.
+
+**"No inline default" protects against an *absent* variable, not an empty one.** Absent, the placeholder fails to resolve and the app refuses to start, naming this property — measured. But `ONELIKE_NEWS_FILTER_APIKEY=` resolves to `""`, the app **starts normally**, and the gate then fails closed: a permanently-401 endpoint with no startup error and no log line. That is the right failure mode and the wrong one to be surprised by, and it is exactly the state reached by copying `.env.example` and not filling the value in. If every call 401s, check for an empty variable before suspecting the key.
+
+Because both sides are trimmed, a key may not meaningfully begin or end with whitespace — surrounding whitespace on a correct key is **accepted**, deliberately, so a copy-paste newline cannot lock an operator out.
+
+Accepted **both** ways, with the **query parameter winning** when both are present:
+
+| transport | name |
+|---|---|
+| query parameter | `?apiKey=…` |
+| header | `X-API-Key: …` |
+
+Those two names and that precedence are copied from the sibling repo's `PublicApiController.createDiscussion`, so an agent already written against that API needs no new convention.
+
+**Prefer the header.** A query string is written verbatim to `logs/onelike.log`: both properties files set `logging.level.org.springframework.web=DEBUG`, and `DispatcherServlet`'s request log masks the parameter map but concatenates `getQueryString()` with no guard. The parameter exists for compatibility, not because it is safe.
+
+### Errors
+
+Two codes, plus the repo-standard catch-all. Same `ApiError` shape as §10.
+
+| HTTP | `errors[0]` |
+|---|---|
+| 401 | `filternews.apikey.invalid` |
+| 400 | `filternews.name.invalid` |
+| 500 | varies, may be `null` |
+
+`filternews.apikey.invalid` covers **missing, blank, wrong, and "the server's own key is unset"** with one code and one status, deliberately: distinguishing them would tell a prober whether they have the parameter name right.
+
+**Read it as `body.errors?.[0]`, not `body.errors[0]`.** A malformed or absent request body is rejected by Spring during argument resolution, before this controller's try/catch exists, so the response is Boot's own — with **no `errors` key at all**, undefined rather than null. That path needs no key, so an unauthenticated caller can reach it. Same hole as §10; stated here because an agent author has no reason to read the Console's error section.
+
+### Two things this endpoint deliberately does not have
+
+- **No `@CrossOrigin`**, unlike all 19 other controllers here. CORS is browser-enforced only, so it protects nothing on a server-to-server call, and a shared global key has no business in a web page where any visitor could read it out of the JavaScript. A browser therefore cannot read this response cross-origin, which is the correct signal.
+- **No global row cap.** Considered and declined at the gate.
+
+### Shared with the Console
+
+`FilterNewsConsoleService.normaliseName(String)` is now the single choke point for the name rules (trim, non-empty, `≤ 120`, no ISO control characters) and both controllers call it. The Console's wire behaviour is unchanged — the rules and their order are what `FilterNewsController` enforced inline before the method existed.

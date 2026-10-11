@@ -14,10 +14,12 @@ import lombok.Setter;
 import java.util.Date;
 
 /**
- * Permanent cache of Google News article id -> publisher URL.
+ * Cache of Google News article id -> publisher URL.
  *
- * The mapping never changes once resolved, so rows are written once and never
- * invalidated. Keyed on a SHA-256 of the article id rather than the id itself:
+ * The mapping never changes once resolved, so a row is written once and never
+ * rewritten - but it is not permanent: CleanupService purges rows no pin
+ * depends on every 72 hours, and a purged id is simply decoded again on next
+ * use. Keyed on a SHA-256 of the article id rather than the id itself:
  * ids run past 700 characters, which overflows the 3072-byte unique index limit
  * on MySQL/MariaDB with utf8mb4.
  */

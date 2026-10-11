@@ -91,10 +91,10 @@ public class FilterNewsController {
             // client-assertable, which is why no DTO here carries an identity.
             String createdby = consoleToken.requireAdminOrModerator(authorization);
 
-            String name = filterNewsDTO.getName() == null ? "" : filterNewsDTO.getName().trim();
-            if (name.isEmpty() || name.length() > FilterNewsConsoleService.NAME_MAX_LENGTH || hasControlCharacter(name)) {
-                throw new FilterNewsException(CODE_NAME_INVALID);
-            }
+            // Trim and the three name rules live in the service, so the agent
+            // write path enforces byte-identical validation from one place
+            // rather than a second copy of these checks.
+            String name = FilterNewsConsoleService.normaliseName(filterNewsDTO.getName());
 
             log.debug("I am adding the news filter " + name);
 
@@ -165,15 +165,6 @@ public class FilterNewsController {
         } catch (Exception e) {
             return errorService.createApiError(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Error : Problem at server", e);
         }
-    }
-
-    private boolean hasControlCharacter(String name) {
-        for (int i = 0; i < name.length(); i++) {
-            if (Character.isISOControl(name.charAt(i))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /**

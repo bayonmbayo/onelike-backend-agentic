@@ -16,8 +16,10 @@ import java.util.Date;
 /**
  * Cache of publisher page URL -> preview image URL.
  *
- * An article's image does not change once published, so each page is scanned
- * once and the result kept. Keyed on a SHA-256 of the page URL rather than the
+ * An article's image does not change once published, so a page is scanned once
+ * and the result reused - but the row is not kept forever: CleanupService
+ * purges rows no pin depends on every 72 hours, and a purged page is simply
+ * rescanned on next use. Keyed on a SHA-256 of the page URL rather than the
  * URL itself: URLs run past the 3072-byte unique index limit on MySQL/MariaDB
  * with utf8mb4.
  *

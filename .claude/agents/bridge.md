@@ -41,6 +41,8 @@ In practice the spec is not a one-shot hand-off: it is a durable document — on
 
 You have no write tools, so you **author** contract claims and the orchestrator **transcribes** them. That division is the real one — "bridge owns the file" was never true. A single factual correction sourced **verbatim from another stage** (for instance `verifier` measuring that a JSON object’s key order is hash order, not insertion order) may be transcribed without resuming you, provided the file’s own re-check line names the stage it came from. Anything requiring judgement about what the contract should say comes back to you.
 
+One carve-out, so a non-browser path does not have to resume you for nothing: **a section documenting a path with no browser or mobile client may be authored by `builder` from the confirmed plan, provided the section states that exclusion in its own text** and the file's header says which sections are client-facing. `CONSOLE-CONTRACT.md` §13 is the worked example — it records "no `@CrossOrigin`, so a browser cannot read this response cross-origin, which is the correct signal", which is the very question you would have been asked.
+
 ## Output format
 
 - **Endpoint**: method + path (backend) and where the client calls it from (file/function), naming which client (web or mobile).

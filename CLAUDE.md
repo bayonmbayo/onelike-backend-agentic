@@ -4,7 +4,7 @@ Spring Boot 3.1.3 / Java, Maven build, MySQL (Hibernate `ddl-auto=update`, no Fl
 
 ## Commands
 - `./mvnw spring-boot:run` — run locally
-- `./mvnw test` — runs 11 tests: a context load plus the behavioural suites under `src/test/java/com/onelike/app/{support,controller}` (`ConsoleTokenTest` for token verification, `FilterNewsControllerAuthTest` for the 401/403 boundary with `MockMvc`). **Extend these rather than hand-building fixtures** — a harness now exists. The `test` profile (`src/test/resources/application-test.properties`) points them at the `onelike_test` schema on the same host MySQL, never the live `onelike`
+- `./mvnw test` — runs **22** tests, decomposed by Surefire as 1 context load + `ConsoleTokenTest` 8 (token verification) + `AgentApiKeyTest` 8 (the API-key gate, no context, no DB) + `FilterNewsAgentControllerAuthTest` 3 (the agent endpoint's 401/400 boundary) + `FilterNewsControllerAuthTest` 2 (the Console's 401/403 boundary with `MockMvc`), zero skips. Quote the **per-class decomposition**, never the total — a total cannot show that a class was silently skipped. **Extend these rather than hand-building fixtures** — a harness now exists. Note `FilterNewsAgentControllerAuthTest` injects the real `onelike.news.filter.apikey` and sends it as a header, so the suite **requires a non-blank `ONELIKE_NEWS_FILTER_APIKEY`**, and `.andDo(print())` — the reflex when a `MockMvc` test fails — would write that key into `target/surefire-reports/`. Don't. The `test` profile (`src/test/resources/application-test.properties`) points them at the `onelike_test` schema on the same host MySQL, never the live `onelike`
 - To reset test state: `DROP DATABASE onelike_test;` — the next `./mvnw test` recreates it from the entities
 - `./mvnw package` — build the jar
 - `docker-compose up` — local MySQL (see `docker-compose.yml` for port/db mapping — this repo's compose maps `3307:3306`, separate from other sibling repos' MySQL containers)
@@ -47,11 +47,13 @@ Organized by layer, single package `com.onelike.app`, everything flat within eac
 
 **Any stage that retracts an instrument adds a row here**, and the orchestrator applies it at stage 06 with the other process edits — never queued. This table is the only defence against the artefact class of failure, where the instrument answers deterministically wrong and the falsifier test structurally cannot catch it, so it must not depend on anyone remembering.
 
+A retraction row has **two parts, applied at different confidence**. The **failing invocation**, verbatim, is an observation and goes in as-is. The **mechanism** — which stage of the pipeline is at fault, and what else that implicates — is a *claim*, and goes in marked **`(provisional)`** until some stage reproduces it with a design that varies the suspect stage's **position** rather than repeating the failure. Worked example: `builder` proposed "`cat -A` is unsound downstream of a line-filter"; `verifier`'s four-case positional design showed `cat -A` was only the messenger, and that `od -c` — listed as *sound* below — is implicated too. Confirmation deletes the word `(provisional)`; it never gates the row.
+
 **Sound on this machine**
 
 | Question | Instrument |
 |---|---|
-| line endings of a file | `perl -0777` raw-byte counts of `\r\n` / `\r` / `\n`, `od -c`, `file -b` — **on a checked-out worktree** |
+| line endings of a file | `perl -0777` raw-byte counts of `\r\n` / `\r` / `\n`, `od -c`, `file -b` — **on a checked-out worktree, and never downstream of a line-filter** (see *Sound only in composition*) |
 | how many rows a table holds | `SELECT COUNT(*)` |
 | is this method byte-identical to an earlier commit | md5 of the brace-matched method body, line endings normalised first |
 | which schema issued a statement | `performance_schema` digests — but only the **connection's default** schema; see `verifier.md` rule 5 for the three-leg claim |
@@ -62,16 +64,28 @@ Organized by layer, single package `com.onelike.app`, everything flat within eac
 
 | Instrument | Why, and for which question |
 |---|---|
-| `awk` | strips CR in this Git Bash, so it reports a CRLF region as LF |
-| `grep -c $'\r'` inside `"$( … )"` | same family; disagreed with `od -c` and `file -b` on a line-ending count |
-| `grep … \| cat -A` | renders a bare `$` with no `^M` on files that are provably CRLF |
+| `grep -c $'\r'` inside `"$( … )"` | disagreed with `od -c` and `file -b` on a line-ending count. For the general case see *Sound only in composition* |
 | `information_schema.TABLES.TABLE_ROWS` | an InnoDB estimate; off by thousands. Not a row-count baseline |
 | `git show` / `git cat-file` | return the **LF-normalised blob**, so under `core.autocrlf=true` a CRLF file reads as pure LF. Never take a line-ending reading from a blob |
 | `git diff --stat` | cannot see an untracked file, so it cannot show which files a change touched |
 | `git diff --numstat` | an insertion count cannot show that a *method* is unchanged |
 | a non-ASCII HTTP body passed as a **shell-literal argument** (e.g. `curl --data-binary '{"name":"S\u00fcddeutsche"}'`) | the shell layer here transcodes `\uXXXX` escapes to a single-byte codepage before curl sees them, so the server stores mojibake and you cannot tell transport corruption from a real storage bug. Write the UTF-8 bytes to a file and send `--data-binary @file` |
 
+**Sound only in composition — rules about pipelines, not verdicts on tools**
+
+| Rule | Why |
+|---|---|
+| **Render first, filter second.** `cat -A FILE \| sed -n '198,212p'` is sound. `sed -n '198,212p' FILE \| cat -A` is **not** — and neither is `sed -n '206p' FILE \| od -c`. | A line-filter (`sed`, and the `grep`/`awk` family) strips the CR before the renderer ever sees it, so a provably-CRLF region reports as LF. The fault is the **filter's position**, not the renderer: `od -c` is sound on a whole file and wrong downstream of `sed`. Established by a four-case positional design, 2026-10-11 (fifth) — the first time one stage corrected another's proposed instrument row |
+
 **Credential handling.** `git diff`, `git show`, `git log -p` and `git add -p` all **render a removed literal**, so the first instinct of reviewing a secret-removal change prints the secret. Use `--stat` / `--numstat` / `git status`, or pipe through a redactor: `sed -E 's/"[A-Za-z0-9]{28,48}"/"<REDACTED>"/g'`.
+
+**No stage reads a credential's value.** Not from `.env`/`.env.prod`, not a `JWT_SECRET` or API-key literal, not through a helper that greps one out. A stage that needs a credential to verify something is **blocked, not authorised**: it declares the gap and prices it, exactly as for a permission denial. This held under live temptation once — a stage found two workarounds in its own scratchpad and ran neither. Fingerprints, lengths, md5s and matched/not-matched verdicts are not values and stay allowed.
+
+A row of the form *confirm this secret's value, or that two deployments' secrets match* becomes **human-only only once the stage has named the key-free substitutes it considered and why each fails** — the same four-part standard as `verifier.md` § *Declaring a gap you did not close*. Without that field, "human-only" is a way of retiring a verification gap rather than closing it. Three such substitutes were found in a single cycle, and a `JWT_SECRET` parity row is itself one matched/not-matched check, not a measurement of the secret.
+
+**`builder` never writes a *value* into `.env` or `.env.prod`** — only the bare `KEY=` line into `.env.example`/`.env.prod.example`. Those four files are **user-authored**: the user edits them by hand, and the loop overwrote their work once, destroying a credential they had just set. The env appender refuses `.env`/`.env.prod` as targets in the same shape as its existing CR-byte refusal, and any write to any env file records the file's md5 **before** and after and reports both — md5 is not content, so this is legal under the rule above. Detection is the weaker half; the refusal is the point.
+
+**Credential residue is disposed of when the cycle lands — unless it is the last copy.** A scratchpad file holding a plaintext secret is deleted as part of landing. The exception is not optional: **never delete the last copy of a user-owned secret.** If the file may be the only surviving copy of something the user still needs, it is a *recovery artefact*, not residue — tell the user it exists, where it is and what it holds, and carry it as a human-only row **with the disposal condition stated** ("retain until X is settled, then delete"). A hold that lives only in the orchestrator's context is how a plaintext secret is still on disk in six months.
 
 ## Agentic loop
 
