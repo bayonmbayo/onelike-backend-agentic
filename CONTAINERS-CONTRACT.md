@@ -165,6 +165,7 @@ Matching is **exact-case** on `name`. The casing is load-bearing — `Linkedin` 
 ## Two wire details that bite if assumed otherwise
 
 - **`position` is presentation order, never an identifier.** It is the dense index of the **language-filtered** list, so the same stored row reports different positions in different languages (stored 22, wire 20 in one verified run). Render in array order; do not sort by it, persist it, or key off it.
+- **`last_update` moves between reads, with no user action.** A scheduled job re-fetches each live theme's news on a 30-minute cadence (anything older than an hour), so a theme's `news` array and `last_update` change over time exactly as the 20 platform cards do. Do not treat a theme payload as immutable after create, do not cache one indefinitely, and do not key anything off `last_update`.
 - **`last_update` is not ISO-8601.** It is Java's `Date.toString()` form — `"Sat Oct 10 17:06:51 CEST 2026"` — identical to what platform cards from `/service/news` already carry. Do not `new Date(...)`-parse it; render as-is or not at all. (It reaches that form because the backend normalises Hibernate's `java.sql.Timestamp` into a plain `java.util.Date`; json-smart would otherwise emit `{"nanos":N}`.)
 
 ---

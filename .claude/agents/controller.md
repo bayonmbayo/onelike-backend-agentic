@@ -13,6 +13,7 @@ Same job as the frontend's `controller`: review how the process performed this c
 
 - **Which of last cycle’s process recommendations were actually applied** — name them, and say which were not and why. Without this line, approved process edits quietly go unwritten.
 - Per-stage note (planner/builder/verifier/learner/manager), one line each.
+- **An orchestrator note.** The orchestrating assistant is not a stage and has no definition file, but it makes real method decisions — what to measure before the gate, whether a defect is a `builder` fix pass or `manager` backlog, which claims it asserts as evidence. Review those as you would a stage's, against "The orchestrator's own claims" in `AGENTIC-LOOP.md`.
 - Confirmation-gate check: honored or not — including any post-gate change, and whether it was routed correctly per AGENTIC-LOOP.md’s "Change after confirmation" rule.
 - Cross-repo/bridge check, if applicable this cycle.
 - **Any stage definition a later cycle has falsified.** An amendment can go stale: `verifier.md` framed database isolation by port until a cycle settled on schema isolation instead. Nothing else re-reads these files for staleness, so re-reading them is yours.

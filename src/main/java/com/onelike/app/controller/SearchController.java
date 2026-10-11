@@ -92,6 +92,15 @@ public class SearchController {
     @Value("${onelike.database.searchnews}")
     private Boolean searchNews;
 
+    /**
+     * Whether the proxy pool is kept warm. Fully independent of searchnews: a
+     * run can want news without the proxy churn, or the other way round. The
+     * inline default keeps the behaviour unchanged where the key is absent,
+     * deliberately unlike searchnews, which has none and must be set.
+     */
+    @Value("${onelike.database.proxies.enabled:true}")
+    private Boolean proxiesEnabled;
+
     public static final String HIBP_API_KEY = "a889a0d81a4a4103b0ece60b1b8353d7";
     public static final String WEBSHARE_API_KEY = "6nsvg241gh1gexuzxh3fcba3p7nggmk09d1rx6w1";
 
@@ -888,7 +897,9 @@ public class SearchController {
 
     @Scheduled(fixedRate = 900000, initialDelay = 10000)
     public void refreshProxies() {
-        replaceInactiveProxies();
+        if(proxiesEnabled) {
+            replaceInactiveProxies();
+        }
     }
 
     @Scheduled(fixedRate = 300000)

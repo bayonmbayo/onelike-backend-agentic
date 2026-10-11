@@ -28,6 +28,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The Social News cards of one signed-in user: the 20 built-in platforms plus
@@ -185,34 +186,69 @@ public class UserNewsContainerService {
     }
 
     /**
+     * The themes a fetch is in flight for right now, keyed title|language.
+     *
+     * news_block has no unique constraint on (socialmedia, language) and
+     * articlesOf does find-then-save, so two concurrent fetches of the same
+     * theme can both find nothing and both insert. Two rows for one key make
+     * NewsBlockRepository.findBySocialMediaAndLanguage throw
+     * NonUniqueResultException on EVERY later read of that card, permanently -
+     * the card is dead until somebody deletes a row by hand. That window is
+     * reachable: a theme created at the same moment a refresh tick picks it up
+     * has no block yet, so it sorts first as the most stale candidate.
+     *
+     * Single JVM only. It is not a distributed lock and is not meant to be: the
+     * cost of losing the race across instances is one wasted fetch plus the
+     * duplicate above, which only a DB constraint could actually rule out.
+     */
+    private static final Set<String> IN_FLIGHT = ConcurrentHashMap.newKeySet();
+
+    /**
      * Makes sure a NewsBlock exists for this theme, fetching live only when the
      * cached block is missing or older than onelike.containers.block-max-age-ms.
      *
-     * Failures are swallowed on purpose: the container has already been created,
-     * and an empty news array is a legitimate answer when every proxy is down.
+     * The single definition of "fetch a theme", shared by the create path and
+     * ThemeRefreshService so the two can never disagree about what fresh means
+     * or about how articlesOf is called.
+     *
+     * Failures are swallowed on purpose: on the create path the container has
+     * already been created, and an empty news array is a legitimate answer when
+     * every proxy is down.
      *
      * The third argument of articlesOf MUST be a throwaway JSONArray - the list
      * it is given is the global all-news feed (News property=2) that /searchnews
      * serves, and a user's private theme has no business leaking into it.
+     *
+     * @return true if a live fetch was actually attempted, false if the cached
+     *         block was still fresh, another thread was already on it, or the
+     *         fetch failed
      */
-    private void loadThemeContent(String title, String language) {
+    boolean loadThemeContent(String title, String language) {
+        if (!IN_FLIGHT.add(title + "|" + language)) {
+            log.debug("I am skipping the theme " + title + " " + language + ", a fetch is already in flight");
+            return false;
+        }
         try {
             NewsBlock block = newsBlockService.findBySocialMediaAndLanguage(title, language);
             if (isFresh(block)) {
                 log.debug("I am reusing the cached news block for the theme " + title + " " + language);
-                return;
+                return false;
             }
 
             log.info("I am fetching live news for the theme " + title + " " + language
                     + " (this spends proxy budget)");
             SearchController.articlesOf(language, title, new JSONArray());
+            return true;
         } catch (Exception e) {
             e.printStackTrace();
             log.debug("I could not fetch news for the theme " + title + " " + language);
+            return false;
+        } finally {
+            IN_FLIGHT.remove(title + "|" + language);
         }
     }
 
-    private boolean isFresh(NewsBlock block) {
+    boolean isFresh(NewsBlock block) {
         return block != null
                 && block.getFeed() != null
                 && block.getUpdated() != null

@@ -13,3 +13,5 @@ Distill this cycle's outcome into a short, specific, actionable note for future 
 
 - "Worked" — a few bullets, or "nothing notable."
 - "Didn't work / watch out for" — a few bullets, each actionable.
+- **"Backlog seeded"** — the items this cycle surfaced that belong to a later one. **Recurrence across cycles is your signal**, and yours alone: when the same footnote has appeared in three entries, promote it to a named row rather than restating it a fourth time. Ranking and carrying it stay `manager`’s.
+- Mark a recurring item **closed** when a cycle resolves it, rather than restating it — and correct an earlier entry when a later cycle falsifies it.

@@ -66,6 +66,14 @@ A cycle is not closed until its work is committed, or the human-only actions tab
 
 **Who, and with what authority.** The orchestrating assistant commits; no subagent does. Scope is only the files in this cycle’s confirmed plan — stage the paths explicitly, never `git add -A`. Show the user the commit message. **Commit yes, push never**: pushing is always the user’s own action. Standing authorisation is **session-scoped and asked for once** — ask at the first landing of a session, then land subsequent cycles without asking again unless the user says otherwise. "The rule says cycles must be landed" is a completion criterion, not permission; do not read it as consent.
 
+## The orchestrator’s own claims
+
+The orchestrating assistant is not one of the six stages and has no definition file, so nothing else binds it. **Its own measurements and evidence claims meet the same bar it imposes on `planner` and `verifier`.**
+
+Before quoting a number or citing a command as evidence, **state what the output would look like if the claim were false.** If it would look identical, the method cannot support the claim. Two real examples, one cycle apart, both the orchestrator’s: `git diff --stat` cannot see an untracked file, so it cannot show that a fix pass touched only that file; `information_schema.TABLES.TABLE_ROWS` is an InnoDB estimate, so it cannot serve as a row-count baseline.
+
+Any number the orchestrator measures and carries into the gate is a **baseline**: label the method that produced it and hand it to `verifier` for re-derivation, exactly as `planner`’s numbers are.
+
 ## Cross-repo work
 
 Some objectives span this backend and the `onelike-agentic` frontend (a new API endpoint plus the frontend code that calls it). For those:
@@ -74,6 +82,7 @@ Some objectives span this backend and the `onelike-agentic` frontend (a new API 
 2. Once the user confirms the plan, invoke [`bridge`](./.claude/agents/bridge.md) **before** either side's `builder` starts. `bridge` pins down the exact contract — request/response JSON shape, field names and types, HTTP method and path, identity fields expected, CORS — as a short written spec both `builder`s work from. This exists because the two repos' `builder`s never see each other's code by default; without `bridge`, one side's assumptions can silently drift from the other's actual implementation.
 3. Backend `builder` and frontend `builder` each implement their side against `bridge`'s spec, independently.
 4. `verifier` (in each repo, or `bridge` again if a fresh check is warranted) confirms the two sides actually agree — not just that each compiles/builds on its own.
+5. **A pinned spec older than the current cycle is re-checked against both repos’ code, not reused on trust** — and a behavioural change to a pinned field’s *dynamics* invalidates the spec just as a change to its shape would. A later cycle made a theme’s `last_update` move between reads with no user action (a scheduled job writes it), while the spec still described a value that changed only on create. No shape check would have caught that, and the frontend `builder` would have worked from it unaware.
 
 ## How to run it
 
