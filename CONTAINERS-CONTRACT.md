@@ -10,6 +10,10 @@ Every field name **and every dynamic** below was verified against the real code 
 
 Three claims about the frontend that a later read of `onelike-agentic` falsified are marked **[corrected]** where they appear, each with a parenthetical saying what was wrong — the point of this file is to be a record of *verified* claims, so a silent repair would lose the fact that the claim was once believed.
 
+One section is **forward spec, not a record of built behaviour**: § *Theme allowance*, and the `themes` object it defines on three responses. At backend `9b1165c` neither `user.themequota` nor `onelike.containers.default-themes-per-user` exists, and no response carries `themes`. The *decision* is settled (gate, 2026-10-11); the *code* is not written. Delete this paragraph when both builders have landed, and only then.
+
+**What the other side does in the window before it lands — settled at gate, 2026-10-11.** The backend ships **first and at a default of 1**, by the user's explicit decision, with the consequence accepted. So for as long as this paragraph stands, production runs this backend against a client that has **no field to read the allowance from**: `../onelike-agentic` at `a66cb32` contains zero reads of a `themes` response field, and `CardConfigPopup.js:40`'s `THEME_LIMIT = 10` still drives both the copy and the pre-emptive disable. The lived behaviour is therefore: a user allowed 1 who already holds 1 theme sees the Add button **enabled**, waits out a create that can take up to a minute, and receives a 409 carrying no `themes` to explain it — against copy promising ten. It is a confusing refusal rather than a crash, because the client already treats the 409 as authority. Nothing is wrong on the backend; the frontend half is the mitigation, and `CardConfigPopup.js:739-740` is the single most user-visible line in it.
+
 Frontend work runs that repo's own six-stage loop: start at its `planner`, apply its confirmation gate, then `builder`.
 
 ---
@@ -30,6 +34,7 @@ Both params optional. Returns `200` always — never 404, never an error for an 
 
 ```json
 { "seeded": true,
+  "themes": { "used": 1, "allowed": 1 },
   "containers": [
     { "kind": "PLATFORM", "name": "Twitter", "position": 0 },
     { "kind": "THEME", "name": "AI", "position": 20, "id": 42,
@@ -42,7 +47,7 @@ Both params optional. Returns `200` always — never 404, never an error for an 
 
 PLATFORM entries carry **only** `kind`, `name`, `position`. THEME entries add `id`, `news`, `last_update`, `description`, `website`, `linkspreview`.
 
-Missing, blank or unknown `uuid`, or a user with no rows → `seeded: false` plus the 20 built-in platforms at positions 0-19. `seeded` means "has this user ever customised anything" and is deliberately **not** per-language.
+Missing, blank or unknown `uuid`, or a user with no rows → `seeded: false` plus the 20 built-in platforms at positions 0-19. `seeded` means "has this user ever customised anything" and is deliberately **not** per-language. An unknown or absent `uuid` also reads `themes: { "used": 0, "allowed": 1 }` — the allowance a brand-new user would get, since there is no row to read a quota from. It is copy material only, never authority: this is a login-gated feature.
 
 ### `POST /container`
 
@@ -53,7 +58,9 @@ Missing, blank or unknown `uuid`, or a user with no rows → `seeded: false` plu
 
 `name` is the **caller's surname** (the same identity block as `PinDTO`). The container's own title is `title`.
 
-Returns `{ "created": true, "container": { } }`.
+Returns `{ "created": true, "container": { }, "themes": { "used": 1, "allowed": 1 } }`.
+
+`themes` is **post-insert**: a successful create answers the count that includes the row it just made, so a client that disables its Add button from `used >= allowed` is correct immediately, without a re-fetch. The `created: false` branch carries `themes` too, with the unchanged count.
 
 A duplicate title for the same user *and language* returns `200` with `created: false` and the existing container — idempotent by design, not an error, so a double-submitting popup is safe.
 
@@ -63,7 +70,9 @@ A duplicate title for the same user *and language* returns `200` with `created: 
 { "uuid": "", "firstname": "", "name": "", "email": "", "displayname": "", "id": 42 }
 ```
 
-Returns `{ "deleted": true }`. THEME rows only; a PLATFORM id returns 404.
+Returns `{ "deleted": true, "themes": { "used": 0, "allowed": 1 } }`. THEME rows only; a PLATFORM id returns 404.
+
+`themes` is **post-delete** and is load-bearing, not symmetry: `usercontainer.reducer.js`'s `USERCONTAINER_DELETE_SUCCESS` filters the row out locally and `CardConfigPopup.js`'s `handleConfirmDelete` deliberately does not re-fetch on success, so without it `used` would stay stale-high and the Add button would remain disabled at exactly the moment the user had made room.
 
 ### `POST /containers/order`
 
@@ -89,10 +98,33 @@ Send the **complete** ordered list. Omitted rows are appended, never deleted —
 
 - A theme belongs to the language it was created for. A theme created for English **does not appear** in German Social News at all.
 - Send the backend's own language strings: `English`, `Deutsch`, `Francais`, … — **not** `German` or `French`. An unrecognised value silently falls back to English.
-- The same title can exist **once per language**, so "Crypto"/English and "Crypto"/Deutsch are two separate cards, each consuming one of the user's ten.
-- **The ten-theme cap is global across all languages.** Five English plus five German means the cap is reached; an eleventh in either language returns 409.
+- The same title can exist **once per language**, so "Crypto"/English and "Crypto"/Deutsch are two separate cards, each consuming one unit of the user's allowance.
+- **The theme cap is global across all languages.** Each language shows only its own themes, but the cap counts every language together: five English plus five German is ten. The cap is a per-user allowance, not a fixed ten — see § *Theme allowance*.
 
 ---
+
+## Theme allowance
+
+*Settled at gate, 2026-10-11. **Forward spec** — not built at backend `9b1165c`; see the header.*
+
+Every user has their own theme allowance. **Default 1**, raised per person by an admin with raw SQL in the nullable `user.themequota` column, and **10 is a hard ceiling** no per-user value can exceed — enforced by the configurable `onelike.containers.max-themes-per-user`, which reads `10` in both `application.properties` and `application.prod.properties`; **no code constant pins it**, so a deployment could in principle carry another number. `NULL` means "use the configured default" — it is not the same as `0`. Read-time clamping to `[0, ceiling]` means a hand-typed `25` behaves as `10` and a negative as `0`; `0` legitimately means "no custom cards at all". **No role is read anywhere on this path** — this repo's `User` has no `role` column and the allowance is per person, not per tier.
+
+Enforcement is **at create only**. Nothing is ever deleted, hidden or renumbered because an allowance was lowered, so a user holding 3 themes whose allowance is 1 keeps all 3, reads `used: 3, allowed: 1`, and simply cannot add a 4th until they are below 1. `used > allowed` is therefore a **normal state, not an error** — the client must render it, not treat it as corrupt data.
+
+### The `themes` object
+
+`GET /mycontainers`, `POST /container` and `POST /container/delete` each return, as a **sibling** of their other top-level keys:
+
+```json
+"themes": { "used": 1, "allowed": 1 }
+```
+
+- **Always present on every 2xx response of all three**, in every success branch — including `created: false`, including a missing/blank/unknown/absent `uuid`. **Never present on any error body, whatever the status** — *measured* on 400 `container.title.invalid`, 400 `container.title.reserved`, 403 `container.identity.mismatch`, 404 `container.notfound` and 409 `container.limit.reached`, because all five are `ApiError`, which is `status`/`message`/`errors`/`warnings` only. **Do not implement "absent ⇒ old backend"** — that reading was in an earlier draft of this line and it would mis-handle every 403 and 404. Treat absent-on-2xx as the old-backend signal; on a non-2xx, keep the last `themes` you held.
+- `used` and `allowed` are **always JSON numbers, never null, never absent, never strings.** `used >= 0`; `allowed` is already clamped to `[0, ceiling]` — `[0, 10]` under the config as deployed.
+- `used` counts **every THEME row the user owns, in every language** — including languages this response is not showing. A user whose only theme is German, reading English, gets zero THEME entries in `containers` and `themes: { "used": 1, "allowed": 1 }`. That is correct and is the single likeliest source of a frontend bug: copy that says "1 of 1" next to an empty card list looks broken unless it also says some are in another language.
+- `allowed` is **not** per language. There is no per-language allowance.
+- `POST /containers/order` deliberately does **not** carry `themes`: reorder cannot change the theme count.
+- A **409 `container.limit.reached` carries no `themes`** — `ApiError` is `status`/`message`/`errors`/`warnings` only. On a 409 the client must use the last `themes` it received, or number-free copy if it has none.
 
 ## Errors
 
@@ -114,7 +146,7 @@ Always this shape, from `errorService.createApiError`:
 | 400 | `container.id.missing` / `container.order.empty` | client bug; log it |
 | 403 | `container.identity.mismatch` | **not** a validation error. Revert the optimistic change, close the popup, show the generic sign-in prompt, re-fetch `/mycontainers` |
 | 404 | `container.notfound` | treat as already-deleted: remove locally, no error UI, then resync |
-| 409 | `container.limit.reached` | inline notice naming the limit of ten; popup stays open |
+| 409 | `container.limit.reached` | inline notice naming **the allowance from the last `themes` received** — never a hardcoded ten; the 409 body itself carries no `themes`. With no `themes` ever received, use copy that names no number. Popup stays open |
 | 500 | varies | generic failure; resync |
 
 Title rules worth pre-enforcing client-side so the user avoids a round-trip: trimmed, 1-40 characters, no control characters, and not equal (case-insensitively) to any of the 20 platform names.

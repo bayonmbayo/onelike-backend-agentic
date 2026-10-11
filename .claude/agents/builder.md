@@ -31,6 +31,8 @@ When you are sent back to fix a defect `verifier` found, your scope is **the rep
 
 When you hand `verifier` a baseline — a file list, a set of checksums, a row count — **state its scope and how the scope was derived**, not only its values. Scope has been the defect twice running: an md5 baseline was arithmetically correct and silently omitted eight files the contract itself named as must-not-touch. The values are the easy part; what the baseline *covers* is the claim that gets re-derived.
 
+- **When the count is of *unprotected* sites, state the predicate you counted by.** "Two of five sit outside a `try`" was measured correctly and was the wrong predicate: two of the remaining three sit **inside `catch` blocks**, which protect them no better, and a third sits in a `try` whose `catch` re-runs the same parse — so all five propagate. The predicate for "is this site guarded" is **what the enclosing `catch` does with the throwable** (swallow, rethrow, or re-run the failing operation), never the lexical presence of a `try`. Note the direction of that error: it made a defect look *smaller*, which reads as reassuring, so it is the class of mistake a reviewer is least likely to dig into.
+
 ## What you must NOT do
 
 - **Never write a *value* into `.env` or `.env.prod`**, and do not modify any file the brief says the user is editing this cycle. Your half of env work is the bare `KEY=` line in `.env.example`/`.env.prod.example` — see `CLAUDE.md` § *Credential handling*. If the plan appears to ask for a value, that is a **reportable blocker, not a task**: the user edits these files by hand and one cycle destroyed a credential they had just set. The env appender refuses those two paths as targets, in the same shape as its existing CR-byte refusal.

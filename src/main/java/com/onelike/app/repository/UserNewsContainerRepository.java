@@ -29,7 +29,12 @@ public interface UserNewsContainerRepository extends JpaRepository<UserNewsConta
      */
     UserNewsContainer findByUserAndKindAndNamekeyAndLanguage(User user, String kind, String namekey, String language);
 
-    /** Deliberately NOT language-scoped: the theme cap is global per user. */
+    /**
+     * Deliberately NOT language-scoped: a user's theme allowance is global, so
+     * the count it is compared against counts every language together. The
+     * allowance itself is per user (user.themequota, default 1, ceiling 10) and
+     * lives in UserNewsContainerService.themeAllowance, not here.
+     */
     long countByUserAndKind(User user, String kind);
 
     /**

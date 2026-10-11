@@ -107,10 +107,14 @@ public class UserNewsContainerController {
 
             log.debug("I am deleting the container " + containerDeleteDTO.getId() + " for " + containerDeleteDTO.getEmail());
 
-            containerService.deleteContainer(containerDeleteDTO);
+            JSONObject themes = containerService.deleteContainer(containerDeleteDTO);
 
             JSONObject result = new JSONObject();
             result.put("deleted", true);
+            // The client patches its list locally on a successful delete and
+            // does not re-fetch, so the post-delete count has to ride on this
+            // response or its Add button stays disabled.
+            result.put("themes", themes);
 
             return new ResponseEntity<>(result.toJSONString(), new HttpHeaders(), HttpStatus.OK);
         } catch (ContainerException e) {

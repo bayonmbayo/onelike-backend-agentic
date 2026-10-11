@@ -13,6 +13,7 @@ import com.onelike.app.repository.UserNewsContainerRepository;
 import com.onelike.app.repository.UserRepository;
 import com.onelike.app.util.InfoMint;
 import com.onelike.app.util.SocialMediaPlatforms;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import net.minidev.json.JSONArray;
 import net.minidev.json.JSONObject;
@@ -55,8 +56,20 @@ import java.util.concurrent.ConcurrentHashMap;
  *    "Crypto" (language is part of a theme's identity, see isRendered and the
  *    unique key on UserNewsContainer). The 20 platforms, by contrast, exist in
  *    every language and are shared by all of them - including their order.
- *    The cap of onelike.containers.max-themes-per-user is global, not per
- *    language: 10 themes in the platform, however they are spread.
+ *    The theme allowance is global, not per language: five English themes plus
+ *    five German ones are ten, however they are spread.
+ *
+ * The allowance itself is PER USER, not a fixed ten: the nullable
+ * user.themequota column, which an admin edits by hand with raw SQL. NULL
+ * means "use onelike.containers.default-themes-per-user" (1), and
+ * onelike.containers.max-themes-per-user (10) is a hard ceiling no per-user
+ * value may exceed. No role is read anywhere on this path. themeAllowance is
+ * the single definition of it; nothing re-derives it per call site.
+ *
+ * Enforcement is at CREATE only. Lowering a user's allowance below what they
+ * already hold deletes nothing, hides nothing and renumbers nothing: they keep
+ * their cards, read used > allowed, and simply cannot add another until they
+ * are back under it. used > allowed is a normal state, not an error.
  */
 @Service
 @Slf4j
@@ -80,6 +93,10 @@ public class UserNewsContainerService {
     @Value("${onelike.containers.max-themes-per-user:10}")
     private int maxThemesPerUser;
 
+    /** The allowance of a user whose themequota is NULL. */
+    @Value("${onelike.containers.default-themes-per-user:1}")
+    private int defaultThemesPerUser;
+
     /** A NewsBlock younger than this is reused instead of triggering a live fetch. */
     @Value("${onelike.containers.block-max-age-ms:3600000}")
     private long blockMaxAgeMs;
@@ -92,6 +109,90 @@ public class UserNewsContainerService {
             + "English,Deutsch,Spanish,Francais,Greek,Hindi,Indonesian,Italian,"
             + "Japanese,Dutch,Portuguese,Russian,Turkish,Arabic,Chinese}")
     private String[] newsLanguages;
+
+    // ------------------------------------------------------------------
+    // Allowance
+    // ------------------------------------------------------------------
+
+    /**
+     * A misconfigured default is silently swallowed by the clamp in
+     * themeAllowance - a default of 25 against a ceiling of 10 behaves exactly
+     * like a default of 10, so nothing downstream can ever reveal it. Warn
+     * once at startup rather than inventing a behaviour (throwing would take
+     * the whole application down for a cosmetic misconfiguration, and raising
+     * the ceiling would silently defeat it).
+     */
+    @PostConstruct
+    void warnAboutTheAllowanceConfiguration() {
+        if (defaultThemesPerUser > maxThemesPerUser) {
+            log.warn("I have onelike.containers.default-themes-per-user=" + defaultThemesPerUser
+                    + " above onelike.containers.max-themes-per-user=" + maxThemesPerUser
+                    + ", so every user without a themequota is clamped to " + maxThemesPerUser);
+        }
+    }
+
+    /**
+     * How many themes this user is allowed to hold, across all languages. The
+     * SINGLE definition of that: no call site may re-derive it, or the two
+     * answers drift apart exactly as isRendered was written to prevent.
+     *
+     * Two deliberate properties:
+     *
+     * - a NULL themequota (and a caller with no User row at all, which is what
+     *   a missing, blank or unknown uuid resolves to) answers
+     *   defaultThemesPerUser. NULL is not 0: a stored 0 legitimately means "no
+     *   custom cards at all".
+     * - the stored value is clamped on every READ, not on write, because
+     *   nothing in this application writes it - it arrives from an admin's
+     *   hand-typed UPDATE. A typed 25 therefore behaves as the ceiling and a
+     *   negative as 0, with no DB constraint to maintain and no way for a bad
+     *   row to grant more than onelike.containers.max-themes-per-user.
+     */
+    int themeAllowance(User user) {
+        int quota = (user == null || user.getThemequota() == null)
+                ? defaultThemesPerUser
+                : user.getThemequota();
+        return Math.max(0, Math.min(maxThemesPerUser, quota));
+    }
+
+    /**
+     * The themes object the three reading/mutating endpoints carry, as a
+     * sibling of their other top-level keys.
+     *
+     * Both values are int, and "used" is narrowed at every call site rather
+     * than here taking a long: countByUserAndKind answers a long, and this
+     * signature is what forces the cast to be visible at the call site instead
+     * of being a widening nobody notices. The contract pins both as JSON
+     * numbers, never null and never strings, so there is exactly one primitive
+     * type in play on this path.
+     *
+     * Deliberately NOT on /containers/order: a reorder cannot change the theme
+     * count.
+     */
+    JSONObject themesJson(User user, int used) {
+        JSONObject themes = new JSONObject();
+        themes.put("used", used);
+        themes.put("allowed", themeAllowance(user));
+        return themes;
+    }
+
+    /**
+     * The user's THEME rows counted from a list that is already in hand, for
+     * the read and delete paths - one pass over a list we loaded anyway rather
+     * than a second COUNT query.
+     *
+     * Counts EVERY language, not the one being rendered: the allowance is
+     * global, so the count it is compared against has to be too.
+     */
+    private int themeCountOf(List<UserNewsContainer> containers) {
+        int used = 0;
+        for (UserNewsContainer container : containers) {
+            if (KIND_THEME.equals(container.getKind())) {
+                used++;
+            }
+        }
+        return used;
+    }
 
     // ------------------------------------------------------------------
     // A - list
@@ -107,13 +208,19 @@ public class UserNewsContainerService {
      * ever customised anything", and the platform rows it is really about are
      * shared by all languages. A user with only a German theme therefore reads
      * seeded:true with the 20 untouched defaults in English.
+     *
+     * themes is always present, including for an unresolved caller, who reads
+     * used:0 with the default allowance - there is no row to read a quota from.
+     * used is counted from the list already loaded, over EVERY language, so
+     * this still costs exactly the one query it always did.
      */
     public JSONObject myContainers(String uuid, String language) throws Exception {
         String resolvedLanguage = normalizeLanguage(language);
 
+        User user = null;
         List<UserNewsContainer> stored = new ArrayList<>();
         if (uuid != null && !uuid.trim().isEmpty()) {
-            User user = userRepository.findUserByUuid(uuid.trim());
+            user = userRepository.findUserByUuid(uuid.trim());
             if (user != null) {
                 stored = containerRepository.findByUserOrderByPositionAsc(user);
             }
@@ -121,6 +228,7 @@ public class UserNewsContainerService {
 
         JSONObject result = new JSONObject();
         result.put("seeded", !stored.isEmpty());
+        result.put("themes", themesJson(user, themeCountOf(stored)));
         result.put("containers", containersJson(stored, resolvedLanguage));
         return result;
     }
@@ -132,6 +240,10 @@ public class UserNewsContainerService {
     /**
      * Adds a theme. Idempotent: an existing theme with the same case-insensitive
      * title answers created:false and that container rather than an error.
+     *
+     * themes is on BOTH answers and is post-insert on the created:true one, so
+     * a client that disables its Add button from used >= allowed is correct
+     * immediately with no re-fetch.
      *
      * @param title the already trimmed and validated title
      */
@@ -150,12 +262,14 @@ public class UserNewsContainerService {
             JSONObject result = new JSONObject();
             result.put("created", false);
             result.put("container", themeJson(existing, wirePosition(user, existing, language), language));
+            result.put("themes", themesJson(user, (int) containerRepository.countByUserAndKind(user, KIND_THEME)));
             return result;
         }
 
-        // Global cap, not per language: "max. 10 custom theme news in the
-        // platform", however the user spread them over languages.
-        if (containerRepository.countByUserAndKind(user, KIND_THEME) >= maxThemesPerUser) {
+        // The user's own allowance (user.themequota, default 1, ceiling 10) and
+        // global, not per language: however they spread their themes over
+        // languages, they all count against the one number.
+        if (containerRepository.countByUserAndKind(user, KIND_THEME) >= themeAllowance(user)) {
             throw new ContainerException("container.limit.reached");
         }
 
@@ -183,6 +297,11 @@ public class UserNewsContainerService {
         JSONObject result = new JSONObject();
         result.put("created", true);
         result.put("container", themeJson(container, wirePosition(user, container, language), language));
+        // Recounted, deliberately NOT "the pre-insert count + 1". The +1 is
+        // correct today and is an off-by-one waiting for whoever next edits
+        // this block; one COUNT is noise against a create that can legitimately
+        // spend 60 seconds on a live fetch.
+        result.put("themes", themesJson(user, (int) containerRepository.countByUserAndKind(user, KIND_THEME)));
         return result;
     }
 
@@ -263,9 +382,18 @@ public class UserNewsContainerService {
     /**
      * Deletes one of the caller's own themes and renumbers what is left to
      * 0..n-1. Platform rows are never deletable.
+     *
+     * @return the themes object for the response, post-delete. It is
+     *         load-bearing rather than symmetry: the frontend's reducer patches
+     *         its container list locally on a successful delete and
+     *         deliberately does not re-fetch, so without this the client's
+     *         "used" would stay stale-high and its Add button would stay
+     *         disabled at exactly the moment the user had made room. Counted
+     *         from "remaining", which this method already loads for densify, so
+     *         it costs no extra query.
      */
     @Transactional
-    public void deleteContainer(ContainerDeleteDTO containerDeleteDTO) throws Exception {
+    public JSONObject deleteContainer(ContainerDeleteDTO containerDeleteDTO) throws Exception {
         User user = resolveCaller(containerDeleteDTO.getUuid(), containerDeleteDTO.getFirstname(),
                 containerDeleteDTO.getName(), containerDeleteDTO.getDisplayname(), containerDeleteDTO.getEmail());
 
@@ -282,6 +410,8 @@ public class UserNewsContainerService {
         List<UserNewsContainer> remaining = containerRepository.findByUserOrderByPositionAsc(user);
         densify(remaining);
         containerRepository.saveAll(remaining);
+
+        return themesJson(user, themeCountOf(remaining));
     }
 
     // ------------------------------------------------------------------
@@ -665,10 +795,31 @@ public class UserNewsContainerService {
             // describe the same snapshot of the feed. A second read or a second
             // parse of the block would let a preview entry point at an article
             // this response does not contain.
-            Object feed = new JSONParser(JSONParser.MODE_PERMISSIVE).parse(block.getFeed());
-            result.put("news", feed);
-            result.put("last_update", wireDate(block.getUpdated()));
-            linkspreview = previewOf(feed, language, container.getName());
+            //
+            // Guarded per card: /service/mycontainers renders every one of the
+            // caller's themes in one response, so an unparseable news_block.feed
+            // (a truncated write, a hand-edited row) would otherwise throw out
+            // of containersJson and 500 the WHOLE page - every platform card
+            // included. Degrading the single bad card to the empty-block answer
+            // is the same state a theme already legitimately has before its
+            // first fetch lands, so the client needs no new branch for it.
+            Object feed = null;
+            try {
+                feed = new JSONParser(JSONParser.MODE_PERMISSIVE).parse(block.getFeed());
+            } catch (Exception e) {
+                e.printStackTrace();
+                log.warn("I could not parse the news block of the theme " + container.getName() + " " + language
+                        + ", so this card answers no news");
+            }
+
+            if (feed == null) {
+                result.put("news", new JSONArray());
+                result.put("last_update", wireDate(block.getUpdated()));
+            } else {
+                result.put("news", feed);
+                result.put("last_update", wireDate(block.getUpdated()));
+                linkspreview = previewOf(feed, language, container.getName());
+            }
         }
 
         result.put("description", "");

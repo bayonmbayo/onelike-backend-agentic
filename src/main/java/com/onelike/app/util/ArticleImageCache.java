@@ -27,9 +27,13 @@ import java.util.Set;
  * The preview job runs every 5 minutes per language x network, and before this
  * cache every article in every feed cost two proxy requests per cycle (page
  * fetch + image HEAD) -- the same articles over and over, which blew through the
- * proxy provider's budget. Now each article is scanned once: positive results
- * are permanent (an article's image does not change), negative results are
- * re-tried once a day in case the page was temporarily unreachable.
+ * proxy provider's budget. Now each article is scanned once: a positive result
+ * is never re-scanned for as long as its row lives (an article's image does not
+ * change), negative results are re-tried once a day in case the page was
+ * temporarily unreachable. "Never re-scanned" is the cache's policy, not the
+ * row's lifetime: CleanupService purges rows no pin depends on every 72 hours,
+ * and a purged page is simply rescanned on next use - see ArticleImage's own
+ * javadoc, which states it the same way.
  *
  * Static and reached through the same initStaticDao() pattern as
  * GoogleNewsUrlDecoder, because the caller (giveMeArrayOfLinks) is static and
@@ -47,7 +51,11 @@ public class ArticleImageCache {
 
     private static ArticleImageRepository imageRepository;
 
-    /** Negative results are re-scanned once after this; positive results are permanent. */
+    /**
+     * Negative results are re-scanned once after this. A positive result is never
+     * re-scanned while its row lives - but the row is not kept forever, since
+     * CleanupService purges unpinned rows every 72 hours.
+     */
     private static final long NEGATIVE_TTL_MS = 24L * 60 * 60 * 1000;
 
     /** Column width of article_image.image_url. */
@@ -127,7 +135,7 @@ public class ArticleImageCache {
             if (hit == null) {
                 pending.put(url, new ArticleImage(hash, null));
             } else if (hit.getImageUrl() != null) {
-                results.put(url, hit.getImageUrl()); // permanent positive -- zero proxy calls
+                results.put(url, hit.getImageUrl()); // cached positive -- zero proxy calls
                 hits++;
             } else if (hit.getChecked() != null && hit.getChecked().getTime() > negativeCutoff) {
                 hits++; // fresh negative -- zero proxy calls
