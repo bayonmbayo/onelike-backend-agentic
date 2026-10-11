@@ -8,6 +8,8 @@ The frontend side is **built and committed** too — `onelike-agentic` at `916f3
 
 Every field name **and every dynamic** below was verified against the real code on both sides — `controller/UserNewsContainerController.java`, `service/UserNewsContainerService.java`, `model/dto/Container*.java`, `controller/SearchController.java` (`articlesOf`, `giveMeArrayOfLinks`), `util/ArticleImageCache.java`, `service/ThemeRefreshService.java`, `service/CleanupService.java` here; `src/components/Item.js`, `src/components/SocialMediaListRender.js`, `src/components/CardConfigPopup.js`, `src/components/Home.js`, `src/services/usercontainer.service.js` there — **not** relayed from any planning-stage spec. Where this file and an earlier `bridge` spec disagree, this file is right. Re-checked in full on 2026-10-11, the `linkspreview` cycle.
 
+Three claims about the frontend that a later read of `onelike-agentic` falsified are marked **[corrected]** where they appear, each with a parenthetical saying what was wrong — the point of this file is to be a record of *verified* claims, so a silent repair would lose the fact that the claim was once believed.
+
 Frontend work runs that repo's own six-stage loop: start at its `planner`, apply its confirmation gate, then `builder`.
 
 ---
@@ -16,7 +18,7 @@ Frontend work runs that repo's own six-stage loop: start at its `planner`, apply
 
 Always the **unsuffixed** `process.env.REACT_APP_ONELIKE_BACKEND_API` (`https://api.onelike.app/service`), even in a non-English build. The per-language variables (`_DE`, `_FR`, …) point at `/dienst`, `/servicefr` … which are different controllers that do **not** have these endpoints. Mirror `newspin.service.js`; do not copy `socialmedia.service.js`'s 15-language-copies pattern here.
 
-All mutations are POST — this repo has no PUT or DELETE anywhere.
+All mutations are POST — the **container API** has no PUT and no DELETE **[corrected]**. (This read "this repo has no PUT or DELETE anywhere", which is false of the frontend: `src/services/apikey.service.js:35` sends `method: 'DELETE'` to the Cloudflare worker. Only the narrow claim about these four endpoints holds. Corrected on 2026-10-11 against the frontend source.)
 
 ---
 
@@ -139,13 +141,13 @@ Three things were needed on the client for `kind === "THEME"`. All three are **i
 
 1. **`kind` is destructured** in `SocialMediaNews` (`Item.js:104`) and `SocialMediaNewsPreview` (`:255`, `:258`) — the components this feature calls "SocialMediaCard". There is no file by that name.
 2. **Icon.** `Logo` now takes a `kind` prop and returns `<></>` for THEME *before* the `switch (name)` (`Item.js:552-561`), so a theme called "AI" can never fall into a platform case. **Deliberate deviation from the original spec**, which asked for a generic icon: the client chose no icon at all. Icons are client-owned, so this is its call.
-3. **No background image for THEME.** `Image` builds `/<name.toLowerCase()>-image-<theme>.png`, which would 404 for a theme, so the call site is guarded by `isTheme ? <></> : <Image … />` (`Item.js:398`). Layouts 3 and 4 (description-only, image-only) are additionally folded back to layout 1 for a theme (`:192`, `:351`), and the `InfoIcon` that was the only way to reach layout 3 is no longer rendered on a theme card (`8b495af`).
+3. **No background image for THEME** **[corrected]**. `Image` does derive `/<name.toLowerCase()>-image-<theme>.png`, but an unmatched name never *requests* it: its `switch (name)` ends `default: return <></>` (`Item.js:712-713`) and `imageLocation` is read only inside a matched `case` body, so for a theme no `<img>` is created and no HTTP request is issued. (This passage claimed a theme "would request `/ai-image-dark.png` and 404"; that cannot happen. Corrected on 2026-10-11 against the frontend source.) The real hazard was a **blank card**: the ~5-second `setInterval` at `Item.js:171-182` randomly promotes a card to the image-only layout, whose only content is `<Image … />` — which for a theme renders nothing at all. Already fixed in the frontend: the interval returns early when `isTheme` (`:167-169`), the call site is guarded by `isTheme ? <></> : <Image … />` (`:399`), the description-only and image-only layouts are folded back to layout 1 for a theme (`:193`, `:352`), and the `InfoIcon` that was the only other way to reach them is no longer rendered on a theme card (`8b495af`).
 
 Also: `website` is `null` for themes, so prefer skipping the `<a>` wrapper over rendering a non-clickable link; `description` is `""`.
 
 ### The merge with `/service/news`
 
-`/service/news` still provides the 20 built-ins' **content**; `/mycontainers` provides **order and membership**. Merge in `SocialMediaListRender.js` (shared by all 16 language wrappers) and feed the result to `CustomPagination`.
+`/service/news` still provides the 20 built-ins' **content**; `/mycontainers` provides **order and membership**. Merge in `SocialMediaListRender.js` (shared by all **15** language wrappers **[corrected]** — a glob of `src/components/SocialMediaList*.js` returns 16 files, but one of them is `SocialMediaListRender.js` itself, which is the merge point and not a wrapper; this read 16. Corrected on 2026-10-11 against the frontend source) and feed the result to `CustomPagination`.
 
 Iterate `containers` — the API's order is the spine — not the news array:
 
