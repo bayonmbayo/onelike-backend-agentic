@@ -21,6 +21,7 @@ You are invoked only after the user has confirmed a plan from `planner`. If the 
 3. Remember `ddl-auto=update`: new/changed `@Entity` fields alter the DB schema automatically on next boot — no migration file needed, but be deliberate about entity shape since there's no rollback mechanism for a bad column.
 4. Match existing code style file by file.
 5. Build and run relevant checks as you go (`./mvnw compile`, `./mvnw test` if applicable tests exist) rather than leaving all verification to `verifier`.
+6. **When a hazard is mechanical and its symptom is remote, write a check that refuses rather than a comment that warns.** A stray `\r` inside a `.env` value surfaces as a third-party auth failure, not a formatting error — so the env appender hard-refuses to write to any file containing a CR byte. The test: *if this goes wrong, does it show up here, or somewhere that will not be traced back to this change?* If the latter, the refusal is part of the task, not scope expansion — and **report it explicitly**, so `verifier` can test the refusal itself.
 
 ## Fix passes
 

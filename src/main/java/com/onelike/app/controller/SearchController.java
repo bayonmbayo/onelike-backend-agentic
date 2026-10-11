@@ -101,8 +101,21 @@ public class SearchController {
     @Value("${onelike.database.proxies.enabled:true}")
     private Boolean proxiesEnabled;
 
-    public static final String HIBP_API_KEY = "a889a0d81a4a4103b0ece60b1b8353d7";
-    public static final String WEBSHARE_API_KEY = "6nsvg241gh1gexuzxh3fcba3p7nggmk09d1rx6w1";
+    @Value("${onelike.hibp.api-key}")
+    private String hibpApiKey;
+
+    @Value("${onelike.webshare.api-key}")
+    private String webshareApiKeyValue;
+
+    /**
+     * Static copy of {@link #webshareApiKeyValue}, assigned in initStaticDao().
+     * Spring never injects static fields: an @Value on one is ignored silently and
+     * the field just stays null, so the key has to arrive on an instance field and
+     * be copied across. It is needed statically because replaceInactiveProxies() is
+     * static and so cannot read the instance field -- the same mechanism that method
+     * already relies on for myproxyService.
+     */
+    private static String webshareApiKey;
 
     /**
      * Languages that need News rows. Must match EXACTLY what each
@@ -118,6 +131,7 @@ public class SearchController {
         myproxyService = this.proxyService;
         newsService = this._newsService;
         newsBlockService = this._newsBlockService;
+        webshareApiKey = this.webshareApiKeyValue;
     }
 
     @GetMapping(value = "/version")
@@ -1042,7 +1056,7 @@ public class SearchController {
         try {
             String accountUrl = account.trim().replace("@", "%40");
             URLConnection connection = new URL("https://haveibeenpwned.com/api/v3/breachedaccount/" + accountUrl + "?truncateResponse=false").openConnection();
-            connection.setRequestProperty("hibp-api-key", HIBP_API_KEY);
+            connection.setRequestProperty("hibp-api-key", hibpApiKey);
             connection.connect();
 
             breaches = (JSONArray) new JSONParser(JSONParser.MODE_PERMISSIVE).parse(new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8));
@@ -1284,7 +1298,7 @@ public class SearchController {
         JSONObject proxy_raw = null;
         try {
             URLConnection connection = new URL("https://proxy.webshare.io/api/v2/proxy/list/?mode=direct&page=1&page_size=80").openConnection();
-            connection.setRequestProperty("Authorization", WEBSHARE_API_KEY);
+            connection.setRequestProperty("Authorization", webshareApiKey);
             connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36");
             connection.connect();
 

@@ -35,6 +35,37 @@ Organized by layer, single package `com.onelike.app`, everything flat within eac
 - `../onelike-agentic` — the React frontend this backend serves. Has its own `CLAUDE.md`/`AGENTIC-LOOP.md`/`.claude/agents/` for the same six-stage loop.
 - `../onelike-service-jx` — a separate, more mature backend sharing this package structure, which already has a working `User`/`InfoNews`/`Pin` feature at `POST /servicepub/pin` (referenced when designing new per-user features here, since it's the closest real precedent even though the code lives in a different repo).
 
+## Measurement instruments
+
+**An instrument is only sound for a *question*.** `grep` is fine for "does this string occur" and wrong for "how many CR bytes". Before citing a number or a command as evidence, find the question here. If the instrument you are about to use is not listed and the claim is load-bearing, say so and corroborate with a second, different instrument.
+
+`LEARNINGS.md` records *which cycle* added or demoted a row; this section is the current state.
+
+**Sound on this machine**
+
+| Question | Instrument |
+|---|---|
+| line endings of a file | `perl -0777` raw-byte counts of `\r\n` / `\r` / `\n`, `od -c`, `file -b` — **on a checked-out worktree** |
+| how many rows a table holds | `SELECT COUNT(*)` |
+| is this method byte-identical to an earlier commit | md5 of the brace-matched method body, line endings normalised first |
+| which schema issued a statement | `performance_schema` digests — but only the **connection's default** schema; see `verifier.md` rule 5 for the three-leg claim |
+| is a compose file valid | `docker compose -f <file> config -q` (client-side, no daemon needed) |
+| does this string occur in tracked files | `git grep -F`, over worktree / `HEAD` / `--cached` as appropriate |
+
+**Unsound here — do not cite a number from these**
+
+| Instrument | Why, and for which question |
+|---|---|
+| `awk` | strips CR in this Git Bash, so it reports a CRLF region as LF |
+| `grep -c $'\r'` inside `"$( … )"` | same family; disagreed with `od -c` and `file -b` on a line-ending count |
+| `grep … \| cat -A` | renders a bare `$` with no `^M` on files that are provably CRLF |
+| `information_schema.TABLES.TABLE_ROWS` | an InnoDB estimate; off by thousands. Not a row-count baseline |
+| `git show` / `git cat-file` | return the **LF-normalised blob**, so under `core.autocrlf=true` a CRLF file reads as pure LF. Never take a line-ending reading from a blob |
+| `git diff --stat` | cannot see an untracked file, so it cannot show which files a change touched |
+| `git diff --numstat` | an insertion count cannot show that a *method* is unchanged |
+
+**Credential handling.** `git diff`, `git show`, `git log -p` and `git add -p` all **render a removed literal**, so the first instinct of reviewing a secret-removal change prints the secret. Use `--stat` / `--numstat` / `git status`, or pipe through a redactor: `sed -E 's/"[A-Za-z0-9]{28,48}"/"<REDACTED>"/g'`.
+
 ## Agentic loop
 
 This project is developed by the same six-stage subagent cycle as the frontend, defined in `.claude/agents/`. See **[AGENTIC-LOOP.md](./AGENTIC-LOOP.md)** for the full cycle and the mandatory human-confirmation gate after planning — same rule as the frontend: `planner`'s proposed plan must be confirmed by the user before `builder` touches code.

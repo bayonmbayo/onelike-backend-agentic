@@ -20,6 +20,8 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
       JWT_SECRET: ${JWT_SECRET}
       CLOUDFLARE_IMAGES_TOKEN: ${CLOUDFLARE_IMAGES_TOKEN}
+      HIBP_API_KEY: ${HIBP_API_KEY}
+      WEBSHARE_API_KEY: ${WEBSHARE_API_KEY}
     depends_on:
       - mysqldb
       - redis-master
