@@ -75,13 +75,16 @@ class FilterNewsAgentControllerAuthTest {
      * Sent as the query parameter, the transport the sibling API's agents
      * already use. A wrong key answers the same code and status as no key at
      * all - the response must not tell a prober that the parameter name landed.
+     * The value must stay non-blank: a blank ?apiKey= makes the controller fall
+     * back to the absent X-API-Key header, and this case would then pass
+     * without testing a wrong key at all.
      */
     @Test
     void postWithAWrongKeyAsQueryParameterIsUnauthorized() throws Exception {
         long before = filterNewsRepository.count();
 
         mockMvc.perform(post("/service/filternews/agent")
-                        .param("apiKey", "bm90LXRoZS1yaWdodC1rZXktYXQtYWxsLW5vdC1jbG9zZQ")
+                        .param("apiKey", "test-fixture-wrong-key-not-a-real-secret")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Agent Auth Test Publisher\"}"))
                 .andExpect(status().isUnauthorized())

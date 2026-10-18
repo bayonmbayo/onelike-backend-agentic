@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * is the arithmetic of the clamp, not how Spring resolves a property, and this
  * class must stay runnable with no onelike_test, no .env and no MySQL.
  *
- * Why the clamp is worth six cases of its own: the stored value arrives from an
+ * Why the clamp is worth seven cases of its own: the stored value arrives from an
  * admin's hand-typed UPDATE, so it is the one number in this feature that no
  * code path validates on the way in. A typed 25 must not grant 25 themes, and
  * a typed -3 must not make the >= comparison in createContainer pass for every

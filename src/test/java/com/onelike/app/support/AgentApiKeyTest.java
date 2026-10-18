@@ -13,14 +13,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * this class's own choosing. Nothing here touches onelike_test, and nothing
  * here uses the real configured key.
  *
- * The key used below is a 43-character base64url string, the shape the real
- * generator produces (32 random bytes, no +, / or =, so it needs no escaping
- * in a query string). Its value is irrelevant to every assertion - what is
- * being tested is the accept/reject decision, not a particular secret.
+ * The key used below is a deliberately fake fixture. Its shape does not
+ * matter: AgentApiKey checks no format, only a trimmed, non-blank, exact
+ * match, so what is being tested is the accept/reject decision, not a
+ * particular secret. The cases below need only that KEY is non-blank and has
+ * no leading or trailing whitespace of its own.
+ *
+ * New credential-shaped fixtures in src/test follow the
+ * test-fixture-...-not-a-real-secret convention. The hyphens mean such a
+ * literal can never match the redactor pattern (a quoted run of 28 to 48
+ * letters and digits), which NoKeyShapedTestLiteralTest refuses in
+ * src/test/java. Older fixtures are not all converted: the four jwt.secret
+ * and onelike.news.filter.apikey property strings in
+ * UserNewsContainerFrontInsertTest and UserNewsContainerQuotaTest predate the
+ * convention and do not follow it (backlog row (a), 2026-10-17).
  */
 class AgentApiKeyTest {
 
-    private static final String KEY = "Zm9vYmFyLXRlc3Qta2V5LW5vdC1hLXJlYWwtc2VjcmV0";
+    private static final String KEY = "test-fixture-agent-key-not-a-real-secret";
 
     private static final String CODE_INVALID = "filternews.apikey.invalid";
 
@@ -64,7 +74,7 @@ class AgentApiKeyTest {
     @Test
     void rejectsAWrongKey() {
         FilterNewsException e = assertThrows(FilterNewsException.class,
-                () -> agentApiKey.requireValidKey("bm90LXRoZS1yaWdodC1rZXktYXQtYWxsLW5vdC1jbG9zZQ"));
+                () -> agentApiKey.requireValidKey("test-fixture-wrong-key-not-a-real-secret"));
 
         assertEquals(CODE_INVALID, e.getMessage());
     }

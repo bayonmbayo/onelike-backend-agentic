@@ -387,3 +387,108 @@ Objective: a created `THEME` lands at index 0 and multiple themes read newest-fi
 | `AGENTIC-LOOP.md`: a source comment's equivalent of an inline search is naming the counter-case it excludes | **applied** |
 | `LEARNINGS.md:3` claimed `controller` content the file had never held | **applied** — made true by this block and the one above it |
 | Contract's `Item.js` pointers (`:104`, `:171-182`, `:379`, `:383-384`, `:552-561`, `:712-713`) | **not applied** — they point into a sibling branch and belong to `bridge`; `controller` did not verify them either |
+
+## Cycle — 2026-10-17 — Key-shaped test literals from `592e9bc` replaced with `test-fixture-…-not-a-real-secret`, plus a `NoKeyShapedTestLiteralTest` guard
+
+**Origin.** The objective came from the user directly ("it is about the key-like strings, begin with the planner"), after the orchestrator flagged, before pushing, that 3 added lines matched `"[A-Za-z0-9]{28,48}"`. It was not in the 2026-10-12 backlog. At the gate the user confirmed the plan, chose the guard test (task 4), and declined a history rewrite. `master` was pushed earlier this session after the user wrote "push master to origin". At stage 06 the user ruled on `AGENTIC-LOOP.md:76`, choosing "Yes, when I explicitly ask": the orchestrator may push only on a direct request from the user, never on its own.
+
+**Orchestrator measurements** (`number | instrument | what it cannot see`):
+- 2 distinct old values match 0 lines of `.env`/`.env.prod` | `grep -qF` per value, verdict only | anything outside those two local files, e.g. deployed hosts
+- 4 property-string fixture values (`jwt.secret=` / `onelike.news.filter.apikey=` at `UserNewsContainerFrontInsertTest`/`UserNewsContainerQuotaTest`, lengths 92 and 48 per `awk length` over the extracted values, never printed) match 0 lines of `.env`/`.env.prod` | the same check | the same blind spot
+- They were introduced by `d6308e3` and `92e34df` | `git log -S"onelike.news.filter.apikey=" -- src/test` | literals introduced under other key names
+- `origin/master..HEAD` = 0 before landing | `git rev-list --count` | a stale remote-tracking ref (no fetch)
+
+**Orchestrator process miss.** This entry was appended *after* `manager` ran, not before as `AGENTIC-LOOP.md:159` requires. `manager` reconciled from the brief's summary and flagged the missing entry itself.
+
+**Backlog row (c) resolved without a re-take.** According to `planner`'s report, the sibling-repo 0-hit search used `git grep -F -f <patternfile>`, and that same instrument found 3 hits in this repo as a known-present control. Only the earlier process-substitution attempt returned the false 0, and it was discarded. The sibling claim therefore did not rest on the broken instrument. This is attributed to `planner`; the orchestrator did not re-run it.
+
+### Learner note (verbatim)
+
+**Worked**
+
+- **Mutations again proved the tests can fail. This is the third cycle running.** `verifier` reported that M1 failed exactly `rejectsAWrongKey`, and M4/M5 showed both refusals `builder` added on its own initiative actually fire. Those refusals are "root must exist" and "the scan must reach its own file" (`NoKeyShapedTestLiteralTest.java:52`, `:62`). Without them, running from the wrong directory would scan zero files and pass, which is the usual way a source-scan test goes falsely green. If `planner` budgets a guard test in future, it should ask for both refusals up front.
+- **A broken instrument was caught by a known answer.** The process-substitution search returned 0 for this repo, but `planner` already knew 3 hits existed, so it threw the result away. Without that known answer, a 0 from a broken instrument looks the same as a true absence.
+- **Closed: the false "43-character base64url" javadoc that `planner` found.** It no longer exists. `Grep` for `43` over `src/test/java` returns 0 hits. `AgentApiKeyTest.java:16-25` now says only that the fixture's shape does not matter.
+- **The wrong-key test is now slightly stronger.** `verifier` measured both new values at 40 characters, so the wrong-key case now reaches the equal-length comparison instead of possibly stopping at a length mismatch.
+
+**Didn't work / watch out for**
+
+- **The guard's regex, which is also `CLAUDE.md:88`'s redactor, misses the known key types.** Its pattern is `"\"[A-Za-z0-9]{28,48}\""`, at `NoKeyShapedTestLiteralTest.java:43`. Three gaps, all from reading the source:
+  - **(a)** The alphabet has no `-` or `_`. `LEARNINGS.md:239` records the loop's own generated keys as 43-character base64url, and that alphabet includes `-` and `_`. Most such keys contain at least one of them ((62/64)^43 ≈ 0.25 contain neither), so most would pass the guard, and most would also slip through the redactor.
+  - **(b)** The `{28,48}` length window does not include this repo's most sensitive real secret. `ConsoleTokenTest.java:23` puts the issuer's `jwt.secret` at 94 bytes.
+  - **(c)** The match must start right after a quote, so a key written as `"prop=VALUE"` is invisible. Live examples sit at `UserNewsContainerFrontInsertTest.java:86-87` and `UserNewsContainerQuotaTest.java:78-79`. They are outside this cycle's scope and they break the new naming convention, and the guard is green.
+  - Two durable artefacts state the guard's reach more widely than it was measured: `NoKeyShapedTestLiteralTest.java:20-22` ("the shape of a real generated key") and `AgentApiKeyTest.java:24` ("the redactor pattern for a real key"). Search stem: `real generated key|pattern for a real key`.
+- **A correct source md5 did not mean a correct class file.** `verifier` restored a mutant with `cp -p`. The original's older mtime made Maven's incremental compiler reuse the mutant `.class`, so a run on md5-correct source failed with the mutant's message. `verifier` fixed it by deleting the `.class`. The quiet direction is an inference and was not measured: a mutant *applied* with `cp -p` from an older copy would run the original class, and the mutant would look like it "survived".
+- **The sibling-repo "0 hits" reading had no instrument attached** in the summary `learner` received. [orchestrator annotation, not part of learner's note: resolved at :403.]
+- **A decline forced by a constraint is not a hatch tick.** `planner` declined backlog rows 4 and 5 because the user fixed the per-class counts. Row 4's hatch count stands at 2 (`LEARNINGS.md:352`), and this decline must not push it to 3.
+
+**Proposed stage-06 edits:** (1) `CLAUDE.md:11` 37→38, adding `NoKeyShapedTestLiteralTest` 1; (2) the fixture convention under *Credential handling*, with the guard's scope in the same sentence; (3) the redactor's blind spots annotated; (4) a new *Unsound* row for `grep -F -f <(…)`, mechanism (provisional); (5) a new *Sound only in composition* row for confirming a restored mutant, mechanism (provisional); (6) the falsified clauses at `NoKeyShapedTestLiteralTest.java:20-22` and `AgentApiKeyTest.java:24`.
+
+**Backlog seeded (new this cycle only)** — restored verbatim at stage 06; the orchestrator dropped it at the first append (controller item 13).
+
+- **Widen the guard and bring the four property-string fixtures into the convention** (`UserNewsContainerFrontInsertTest.java:86-87`, `UserNewsContainerQuotaTest.java:78-79`). Pin the widened pattern with a mutation for each blind spot: base64url with `-`, more than 48 characters, `"k=VALUE"`. Note that `jwt.secret` fixtures must stay ≥64 bytes for HS512 (`ConsoleTokenTest.java:21-24`).
+- **The blank `?apiKey=` gap is still a comment that warns** (`FilterNewsAgentControllerAuthTest.java:78-80`), and `builder`'s mutation showed a blank value still passes. A refusal would be a one-line assertion that the parameter is non-blank, inside the test.
+- **Cleanup at landing:** scratchpad `mvn-full.log` (0 key-shaped lines per `verifier`). It cannot be the last copy of a secret: the orchestrator's pre-gate found the old values matched nothing in `.env`/`.env.prod`, so they were fixtures. Delete it at landing under `CLAUDE.md:96`.
+
+This is the source of manager row 9 (b), which controller found had none on disk.
+
+### Backlog after this cycle (manager)
+
+**Recommended next objective:** harden `articlesOf`'s released platform-feed path (the `finally` close-failure overwrite and the five propagating `parse(newsBlock.getFeed())` sites at `SearchController.java:593/:612/:655/:716/:767`, `finally` at `:772`), built on a static-DAO test seam and a shared H2 harness as task 1. Row (a) rides on task 1. `manager` asks whether the user declined this at an earlier gate; the user has not been asked yet.
+
+**Human-only actions**
+
+| Action | Status | Last measured |
+|---|---|---|
+| Deliver a read-only MySQL credential in a stage's brief, or rule out boot-based DB verification | open | never |
+| Delete `…\ca17e283-e564-45b3-b60a-77f8dd452e25\scratchpad\env.backup` (plaintext `JWT_SECRET`) | open, the file still exists | 2026-10-17, `Glob` name only (manager) |
+| Settle the `.env`/`.env.prod` `ONELIKE_NEWS_FILTER_APIKEY` value | open; the test run implies non-blank in the test JVM only | — |
+| Push local commits | prior commits pushed (`rev-list` = 0, orchestrator); this landing adds 1 | 2026-10-17 |
+| Rotate HIBP/Webshare keys with distinct dev/prod values | open | never |
+| Rotate or remove the `ghp_…` PAT in the Jenkins clone URL | open, not in this worktree | 2026-10-17, worktree only |
+| Confirm `JWT_SECRET` parity, issuer vs this backend | open, not urgent; substitutes (i) minted dev token + curl, (ii) fingerprint (forbidden read), (iii) prod deployment fact | never |
+| Observe whether a proxy strips `Authorization` | open | never |
+| `SELECT COUNT(*) FROM filter_news WHERE active IS NULL`, dev and prod | open | never |
+| Release `../onelike-agentic` `feature/theme-allowance-ui` whole or not at all | open | 2026-10-17, worktree only |
+
+**Backlog, priority-ordered**
+
+1. `articlesOf`: the `finally` close-failure overwrite and the five propagating parse sites.
+2. Static-DAO test seam plus shared H2 harness (task 1 of row 1).
+3. (a, new) Widen `NoKeyShapedTestLiteralTest` (base64url, >48 characters, `"prop=VALUE"`), exempt the `test-fixture-…-not-a-real-secret` shape, add runtime-built self-test samples with one mutation per miss class, and convert the 4 property fixtures, keeping `jwt.secret` ≥64 bytes. Rides with row 2. Hatch 0.
+4. Fold the `@PostConstruct` misconfiguration-warning case into `UserNewsContainerQuotaTest`. Rides with row 2.
+5. Fix the "six cases" count at `UserNewsContainerServiceAllowanceTest.java:16` (7 `@Test`). Rides with row 2.
+6. N5: accept the `filter_news` create-race or take an application-level lock.
+7. `ApplicationContextRunner` test for the no-default hard-fail and the empty-value fail-closed. Hatch stays at 2 (no tick this cycle).
+8. Pin the two unpinned `normaliseName` predicates.
+9. (b, new) Pin the blank `?apiKey=` fall-through in behaviour, not a comment (`FilterNewsAgentController.java:106`). Hatch 0.
+10. ~~(c, new) Re-take the sibling-repo absence claim~~: dropped, resolved by the orchestrator above.
+11. `pinned` null-guard in `PinService` (`PinService.java:67`).
+12. Observe `refreshed > 0` on a run with live proxies, plus the malformed-body response shape.
+
+**Dropped:** the three key-shaped test literals from `592e9bc`, done (`verifier` PASS WITH NOTES). Do not re-propose this. Row 10 (c), as above.
+
+### Process review (controller)
+
+The user approved the whole list at the stage-06 gate ("Apply all"), chose the comment-only `builder` pass for item 11, gave session-scoped commit authority, and ruled on pushing (item 17).
+
+| # | Recommendation | Completion |
+|---|---|---|
+| 1 | `CLAUDE.md:1` revision → `2026-10-17-a` | applied |
+| 2 | `CLAUDE.md:11` 37 → 38, adding `NoKeyShapedTestLiteralTest` 1 | applied. Source: orchestrator's Surefire XML after the final run, 1/8/8/7/4/4/3/2 + 1, zero skips |
+| 3 | Annotate the redactor's one-shape scope after `CLAUDE.md:88` | applied. The guard's line reference was updated from `:43` to `:50` after the item-11 pass moved the field (`grep -n`) |
+| 4 | Fixture-convention paragraph, with the guard's scope in the same sentence | applied |
+| 5 | *Unsound* row for the process-substitution pattern list, observation only, no mechanism | applied |
+| 6 | *Sound only in composition* row: a source md5 proves the source, not the class | applied |
+| 7 | Mirror the `.class`/`cp -p` rule into `builder.md` (mutation rule) and `verifier.md` (rule 9) | applied |
+| 8 | `CLAUDE.md:54`: a stage that discards a reading quotes its command verbatim | applied |
+| 9 | `AGENTIC-LOOP.md:120`: a zero needs a known-present control from the same command | applied |
+| 10 | `AGENTIC-LOOP.md:40` and `:94`: add a comment-stripped whole-file md5 to the comment-only boundary | applied |
+| 11 | Comment-only `builder` pass on `NoKeyShapedTestLiteralTest.java:19-25` and `AgentApiKeyTest.java:22-25` (four false clauses) | applied. `builder` reported matching before/after md5s for every method body and both comment-stripped files. It also changed one extra clause in range: "enforces" → "refuses in src/test/java". Orchestrator re-derivation with its own stripper: `AgentApiKeyTest`'s comment-stripped code differs from HEAD only on the 2 literal lines `verifier` verified, and `NoKeyShapedTestLiteralTest`'s stripped md5 `b9a5edf7…` equals `builder`'s *after* value. That is corroborated, not verified: no pre-edit copy of the untracked file existed to re-hash. Stem searches (`real generated key`, `real key`, `enforced here`) found 0 (`builder`) |
+| 12 | `UserNewsContainerServiceAllowanceTest.java:16` "six cases" → "seven cases"; close manager row 5 | applied. Comment-stripped md5 is equal at HEAD and in the worktree (`949920ba…`, orchestrator). Row 5 is closed |
+| 13 | `LEARNINGS.md:422` annotation marked as orchestrator's; restore `learner`'s "Backlog seeded" section | applied. The section existed in `learner`'s output and was dropped by the orchestrator's first append; it is now restored verbatim and names the source of manager row 9 (b) |
+| 14 | `manager.md`: refuse to reconcile when there is no on-disk entry | applied (inserted after the staleness paragraph) |
+| 15 | `planner.md:44` checklist 12: guard tests budget scans-nothing refusals and one known positive per real credential format | applied |
+| 16 | For the next `manager`: re-print `last measured:` fields; source or drop row (b); row (a) widens the redactor in step with the guard; restore the lost `Item.js` pointer row (owner `bridge`, last measured never); optional `andDo(print` scan into row (a) | not applied: these are manager-authored rows, carried here so they are on disk. Row (b) is now sourced by item 13 |
+| 17 | User ruling on push vs `AGENTIC-LOOP.md:76` | applied. The user chose "Yes, when I explicitly ask": the orchestrator pushes only on a direct user request, never on its own. Recorded at `:393`. `AGENTIC-LOOP.md:76` itself is not edited |
+| 18 | At landing: delete `planner`'s pattern file; stage only this cycle's files by path | applied. `planner` reported its pattern file deleted. Scratchpad residue (`mvn-full.log`, `mvn.log`, `md5s.pl`, `before.txt`, `after.txt`) deleted at landing; none is the last copy of a user secret |
