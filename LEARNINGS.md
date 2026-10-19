@@ -130,7 +130,7 @@ Objective: theme cards rendered as text lists because `themeJson` wrote `linkspr
 **Worked**
 
 - **Before costing a feature, ask whether an existing call already produces the artefact and throws it away.** `loadThemeContent` calls `articlesOf` and **discards the returned `JSONObject` entirely**, so preview resolution, the `ArticleImageCache` pass and the `article_image` commits were already happening on every theme fetch — only the small JSON projection was dropped on the floor. The cycle was a projection, not a fetch, and the incremental proxy cost is **0%, measured** rather than "small". Add this to `planner`'s fetch-path read (2026-10-10): not just "is the machinery there" but "is it already running and being binned".
-- **Derive, don't store, when the source of truth has its own lifecycle.** The obvious design was a new `NewsBlock.linkspreview` column; rejected because `CleanupService` purges `article_image` after 72h, so a stored snapshot rots into entries pointing at vanished cache rows, while recompute-on-read **cannot** produce a dangling entry. It was also the smaller change (no edit to `articlesOf`, the repo's highest-traffic method). `bridge` then made the property true rather than likely by binding the array to the **same parsed feed object** that fills `news` in that same response, not a second read. Reuse the test: *does the data I would cache outlive its own source?*
+- **Derive, don't store, when the source of truth has its own lifecycle.** The obvious design was a new `NewsBlock.linkspreview` column; rejected because `CleanupService` purges `article_image` after 72h, so a stored snapshot rots into entries pointing at vanished cache rows, while recompute-on-read **cannot** produce a dangling entry. It was also the smaller change (no edit to `articlesOf`, the repo's highest-traffic method). `bridge` then made the property true rather than likely by binding the array to the **same parsed feed object** that fills `news` in that same response, not a second read. Reuse the test: *does the data I would cache outlive its own source?* **[Mechanism falsified 2026-10-18 A]** a stored snapshot would not point at cache rows: each entry carries its own `image`/`url` inline (`CONTAINERS-CONTRACT.md:221`), and this cycle stored one for platforms (`NewsBlock.linkspreview`). The theme decision stands on its other ground — the smaller change, no edit to `articlesOf`.
 - **Build fixtures that discriminate, not fixtures that pass.** The run's best evidence was a Deutsch theme with 13 feed items and images cached for #1, #11 and #12: the response carried #1 and #11 and **omitted #12**. A wrong implementation — 20 for every language, or no cap — would have *included* it. That is positive proof that `InfoMint.NUMBER_OF_PREVIEW_IMAGES` (11) is in force and that the `equalsIgnoreCase("English")` branch actually switches, neither of which code reading establishes. Companion fixture: a 22-item English theme with images only for #21/#22 correctly returned `[]`. **Design the fixture so a wrong implementation produces a different observable, not merely a failed assertion.**
 - **Predict the number, then measure it** — the digest-accounting technique from the previous entry, now routine. Predicted the `findByUrlHashIn` digest to advance by exactly 9 (2 per English GET + 1 per Deutsch), measured 9; predicted 0 Hibernate writes to `article_image` and `news_block`, measured 0 and 0; predicted all five `article_image.checked` unchanged, found unchanged. Unplanned bonus: derived from `ArticleImageCache`'s logging condition that the run must emit exactly **5** `"No proxy; N page(s) left unscanned"` lines, got 5 — which is also the direct positive evidence that control reached `if (proxy == null) { … return; }`.
 - **`--numstat` cannot show that a *method* is unchanged — md5 the extracted body.** The brief took builder's `35 insertions / 0 deletions` as proof `articlesOf` was untouched; an insertion count cannot establish that alone. `verifier` extracted the three method bodies by brace-matching from `git show 555e74f:…` and from the worktree, normalised line endings (git emits LF, the worktree is CRLF — a naive diff reports a spurious change) and compared md5s: `articlesOf` 12347 chars identical, `giveMeArrayOfLinks` 2005 chars identical, `getNews` identical. **This is the instrument for "is this method byte-identical" — reuse it whenever a cycle promises not to touch shared code.**
@@ -267,7 +267,7 @@ Objective: replace the flat global 10-theme cap with a per-user allowance an adm
 - **A cross-repo contract is not complete until someone has read how the client mutates its own store — not just which endpoints it calls.** The endpoint inventory was complete and still wrong. `usercontainer.reducer.js`'s `USERCONTAINER_DELETE_SUCCESS` filters the row out **locally** and `CardConfigPopup.js`'s `handleConfirmDelete` **deliberately does not re-fetch** (there is a comment saying so). With `themes` on GET and create only, `used` would have stayed stale-high after a delete while `containers` shrank — and at `allowed: 1` the Add button would have stayed disabled **at exactly the moment the user had made room**. `bridge` found it by reading the consumer's state-update path; the fix was free because `deleteContainer` already fetches `remaining` for `densify`. This **strengthens** the standing "`bridge` earns its slot on wire-level detail" lesson (2026-10-10) rather than repeating it: extend the read from *shape* to *the client's own state transitions*. Recorded at `CONTAINERS-CONTRACT.md:73`.
 - **`bridge` caught the orchestrator writing unbuilt mechanics into a pinned artefact, and the artefact's own convention is what made it catchable.** `user.themequota` and `default-themes-per-user` were asserted as existing when neither did at `9b1165c`; `bridge` measured both absences and cited the file's own header — *"the point of this file is to be a record of verified claims."* **"Settled at gate" marks a decision as settled and says nothing about whether code exists**; in a file whose convention is verified behaviour, a settled decision still needs a not-yet-built marker carrying its own deletion condition (`:13`: delete "when **both** builders have landed, and only then"). Also structurally right and worth keeping: `bridge` moved the mechanics out of § *Language rules*, on the grounds that client-facing shape documented in three places drifts.
 - **First end-to-end evidence for the loop-wide "refuse, don't remind" rule, exercised by two stages in sequence.** `SearchController:88-90` holds `MyproxyService`/`NewsService`/`NewsBlockService` in `private static` fields assigned in `@PostConstruct initStaticDao()` (`:130`). Statics are per class loader; Surefire runs one JVM with `reuseForks`, so **whichever context ran its `@PostConstruct` last owns them**, and a create issued by an H2-backed test can be served by the `onelike_test` context's MySQL-backed beans. `builder` wrote a **check that refuses** instead of a comment that warns (`UserNewsContainerQuotaTest:126-137`: read the static field via `ReflectionTestUtils` and assert `getProxyNumber() == 0`). `verifier` then *tested the guard* — identical `@SpringBootTest` config so Spring returned the cached H2 context, a MySQL context interleaved, observed `reusedQuotaTestContext=true staticIsMyOwnBean=false staticProxyCount=0` with two distinct bean identities, then **forced** the refusal by inserting one `Myproxy` row into its own H2 and catching the `AssertionError`, restoring in a `finally`. Rule 6 of `builder.md`, promoted loop-wide earlier the same day, now has evidence.
-- **New instrument — verify a column addition without a DB credential.** `INIT=` an **old-shape** `user` table into the H2 URL so it pre-exists before Hibernate sees it, run `ddl-auto=update`, then read `INFORMATION_SCHEMA.COLUMNS`: `themequota` present, `INTEGER`, `IS_NULLABLE=YES`, `COLUMN_DEFAULT` null — i.e. the **migration path over a pre-existing table**, not just the fresh-create path, which is the leg `ddl-auto` cycles have always been short of. Then end-to-end on that migrated table: a create leaves it NULL (corroborated: `Grep` for `setThemequota` over `src/main` = **0 hits**), the wire reads `allowed: 1`, and after an admin-style `UPDATE … themequota = 7` a fresh request reads `allowed: 7` as a number. Unproven residue is only "does the MySQL8 dialect emit an equivalent `ALTER` where H2's did", on Hibernate's most travelled migrator path, where failure is loud.
+- **New instrument — verify a column addition without a DB credential.** `INIT=` an **old-shape** `user` table into the H2 URL so it pre-exists before Hibernate sees it, run `ddl-auto=update`, then read `INFORMATION_SCHEMA.COLUMNS`: `themequota` present, `INTEGER`, `IS_NULLABLE=YES`, `COLUMN_DEFAULT` null — i.e. the **migration path over a pre-existing table**, not just the fresh-create path, which is the leg `ddl-auto` cycles have always been short of. Then end-to-end on that migrated table: a create leaves it NULL (corroborated: `Grep` for `setThemequota` over `src/main` = **0 hits**), the wire reads `allowed: 1`, and after an admin-style `UPDATE … themequota = 7` a fresh request reads `allowed: 7` as a number. Unproven residue is only "does the MySQL8 dialect emit an equivalent `ALTER` where H2's did", on Hibernate's most travelled migrator path, where failure is loud. **[Falsified 2026-10-18 A]** 'where failure is loud' — V-M4: a failed ALTER logged one WARN and the context started (H2, no-ALTER-right user; MySQL code-read only). Current state: `CLAUDE.md:65`.
 - **Refine the live-wire-gap rule, second consecutive cycle it has paid.** `builder` declared the `@PostConstruct` misconfiguration warning "wired and reached, branch never observed", judging an appender fixture out of scope; `verifier` closed it in ~8 s with `OutputCaptureExtension`, **already on the classpath** via `spring-boot-test`, observing the real warning text while the same context still served `allowed: 10`. Last cycle it was `com.h2database:h2` at `runtime` scope. The honest rule is stronger than "read the classpath": **a gap declaration must name the fixture it would need and state whether that fixture is already a dependency.** Two for two.
 
 **Didn't work / watch out for**
@@ -492,3 +492,181 @@ The user approved the whole list at the stage-06 gate ("Apply all"), chose the c
 | 16 | For the next `manager`: re-print `last measured:` fields; source or drop row (b); row (a) widens the redactor in step with the guard; restore the lost `Item.js` pointer row (owner `bridge`, last measured never); optional `andDo(print` scan into row (a) | not applied: these are manager-authored rows, carried here so they are on disk. Row (b) is now sourced by item 13 |
 | 17 | User ruling on push vs `AGENTIC-LOOP.md:76` | applied. The user chose "Yes, when I explicitly ask": the orchestrator pushes only on a direct user request, never on its own. Recorded at `:393`. `AGENTIC-LOOP.md:76` itself is not edited |
 | 18 | At landing: delete `planner`'s pattern file; stage only this cycle's files by path | applied. `planner` reported its pattern file deleted. Scratchpad residue (`mvn-full.log`, `mvn.log`, `md5s.pl`, `before.txt`, `after.txt`) deleted at landing; none is the last copy of a user secret |
+
+## Cycle — 2026-10-18 A — Platform-feed job hardened: per-platform fallback serving the saved card, `NewsBlock.linkspreview`, placeholder-free `@IsolatedH2Test` harness, keep-the-last-good-refresh guard
+
+**Origin.** The user asked: "fix what you didn't fix yet … and fix about the platform-feed job". `planner` split the work into A (feed job) and B (guard widening, blank `?apiKey=` pin, rows 7 and 8). At the gate the user chose A first and kept step 5, and put rows 7 and 8 into B. Three later user decisions shaped the cycle:
+- Mid-build: "it can give the empty card, but it could also return what was previously fetched from that card".
+- After rev 0's verifier: "add the column, so that we can store preview images per platform … and fix about the test with the in-memory database". This produced rev 1, where the user chose N5 in, harness option A, and N1 in.
+- After rev 1's verifier: "Keep the last good refresh". This produced the fix pass.
+
+The user's request also counts as the answer to `manager`'s 2026-10-17 question of whether `articlesOf` had been declined earlier.
+
+**Orchestrator notes.**
+- `master` was pushed to origin at the user's explicit request ("push master to origin…"), `92e34df..18442a0`, under the 2026-10-17 push ruling.
+- The 2026-10-17 human-only row for `…\ca17e283-…\scratchpad\env.backup` is **closed**: the file was deleted at the user's request ("you can delete env.backup").
+  - Before deleting, the orchestrator checked that it was not the last copy of anything. Instrument: `md5` fingerprint of each of the 9 keys' values, compared per key against `.env`/`.env.prod`, with only the match verdict printed. Result: all 9 matched `.env`, and 8 of 9 matched `.env.prod` (`ONELIKE_DB_PASSWORD` differs there). Blind spot: copies outside those two files.
+  - Existence after `rm`: absent.
+- This entry is appended **before** `manager` runs, per `AGENTIC-LOOP.md:159` and the new `manager.md` refusal.
+- Builder's Allowance +2 cases (verifier's query) were task 8 of the confirmed rev-0 plan.
+
+**Final state.** 13 files in scope, uncommitted until landing.
+
+Per-class test counts (Surefire XML, `verifier` re-check, total 63):
+
+| Test class | Tests |
+|---|---|
+| context load | 1 |
+| FilterNewsAgentControllerAuthTest | 3 |
+| FilterNewsControllerAuthTest | 2 |
+| IsolatedH2HarnessTest | 6 |
+| SearchControllerFeedJobTest | 17 |
+| UserNewsContainerFrontInsertTest | 4 |
+| UserNewsContainerQuotaTest | 4 |
+| UserNewsContainerServiceAllowanceTest | 9 |
+| AgentApiKeyTest | 8 |
+| ConsoleTokenTest | 8 |
+| NoKeyShapedTestLiteralTest | 1 |
+
+Verifier verdicts: PASS WITH NOTES three times (rev 0, rev 1, fix pass).
+
+### Learner note (verbatim)
+
+**Correction to the brief.** The brief says `CLAUDE.md:11` has a count to update. The file on disk reads **38**, not 37, and already lists `NoKeyShapedTestLiteralTest` 1. The 37 in my injected copy is stale, which is the snapshot defect the file's own line 5 describes, seen again.
+
+**Worked**
+
+- **The migration was tested in both directions, and the rollback check is worth reusing.** V-M1 (H2 with an old-shape table loaded by `INIT=`) showed the column is added, nullable, and the old row survives and serves `[]`. V-M2 showed that **an old entity neither drops the column nor its value**, so rolling back the jar is safe. V-M3 measured the MySQL `ALTER` on `onelike_test`: the column comes out `longtext`, nullable, at the last ordinal. When a cycle adds a column, `planner` should budget V-M2 by default. It costs nothing and is the only check that answers "can we roll back".
+- **Verifier threw out two of its own checks because they could not fail.** First, every md5 came out as `d41d8cd9…`, the md5 of empty input, because of a perl syntax error, so every comparison read SAME. Second, V-M4 as briefed (a VIEW) was void because Hibernate skipped the view. Verifier redesigned it as a non-owner user with no ALTER right. Both catches came from verifier's own suspicion, not from any rule.
+- **Comparing structure fixed a long-standing bug.** N-B: the property-2 guard compared text against `"{\"news\" : []}"` (with spaces), but json-smart writes `{"news":[]}`, so the guard never matched. The fix pass replaced it with `hasNews` / `anyCardHasNews` (`SearchController.java:1073`, `:1090`). **Never decide anything by comparing json-smart's serialised text.**
+- **The harness refuses instead of warning.** Builder found that the placeholder resolves leniently: a missing name started H2 on a database literally named `${…}`. The final design has no placeholder at all. A `ContextCustomizerFactory` in `src/test/resources/META-INF/spring.factories:2` builds a URL per class, and the initializer and extension refusals were kept.
+
+**Didn't work / watch out for**
+
+- **Making each unit fail soft removed the failure that used to protect the aggregate (N-A).** At HEAD, a throw from a `news_block` lookup aborted `saveNews`, which by accident protected the last good refresh. Rev 0's per-platform `fallbackCard` turned that abort into a successful save of 20 empty cards. Two plans did not price this, and only verifier found it. Combined with V-M4 (a failed ALTER boots anyway), it meant every card would be emptied every 5 minutes. **`planner` checklist addition:** for any per-unit guard, ask "what is written when *every* unit degrades, and what did the old hard failure prevent?" The fix pass now guards this at `SearchController.java:1143-1153`.
+- **A user change mid-build that needed a column went to `builder` as a workaround.** Asked to "return what was previously fetched", `builder` took previews from the property-1 row because `NewsBlock` had no column. Rev 1 deleted those helpers. This change passes `AGENTIC-LOOP.md:47`'s test, since it changes wire content on degraded cards and the right answer was an entity column. It should have gone back to `planner` at the moment it arrived.
+- **md5 readings need an empty-input refusal, a must-differ control, and a named extractor.** The empty-input hash `d41d8cd98f00b204e9800998ecf8427e` reads as a perfect match. Builder's HEAD md5s also differed from the earlier values only because the normalisation was different, and verifier's matcher reproduced the earlier values. Proposed amendment to the `CLAUDE.md:62` row:
+  - refuse zero-length bodies or that hash;
+  - include one deliberately changed method that must read DIFFERENT;
+  - md5s are comparable only from the same extractor and normaliser, so name it.
+- **A failure-injection test needs evidence that the failure path ran.** The VIEW version of V-M4 "passed" because nothing was attempted. The redesign's proof was the WARN from `ExceptionHandlerLoggedImpl`, 1 of 27 WARNs.
+- **The leniency mechanism was tested on one axis, not two.** Both property sources were `MapPropertySource`, so the source axis was never varied. The reader axis is confirmed: `Binder.bind` returns the literal and `Environment.getProperty` throws. "The source kind made no difference" is **unmeasured** and stays `(provisional)` in the row.
+- **The brief quoted the control "`${` = 1" with no instrument; builder found 4.** A control count in a brief needs its instrument, the same as any baseline.
+- **The all-empty guard has exactly one falsifier.** Verifier found T15 is the only test that fails under M1 and M7, and catches M3 only through the return value. NOTE-4 adds that FeedJob shares `news` rows across tests, so that one falsifier depends on test order.
+
+**Rulings on the stage-06 candidates**
+
+1. **`CLAUDE.md:11`, 38 → 63** — apply it, using verifier's Surefire decomposition and adding `IsolatedH2HarnessTest` 6 and `SearchControllerFeedJobTest` 17. Name both groups: `@ActiveProfiles("test")` (`OnelikeBackendApplicationTests`, `FilterNewsAgentControllerAuthTest`, `FilterNewsControllerAuthTest`) and `@IsolatedH2Test` (Quota, FrontInsert, FeedJob; Harness has no context).
+2. **`CLAUDE.md:65` "where failure is loud"** — falsified (V-M4). Transcribe verifier's measurement: a failed ALTER logs one WARN and the context **starts**, measured on H2, with MySQL by code-read only. The same row's "unproven residue" (MySQL8 emits the ALTER) is closed **for `onelike_test` only**. Builder's before-reading there was `COUNT(*)` = 0, so an ALTER **against a populated MySQL table** is still unmeasured, and the row should say so. Stem `loud`: `CLAUDE.md:65` and `LEARNINGS.md:270`, with "Cloudflare" as the control. Annotate `:270` as falsified.
+3. **`CLAUDE.md:92` stale sentence** — delete "Not every fixture follows the convention yet … the guard passes over them". The fixtures now live only at `IsolatedH2Test.java:86-87`, both `test-fixture-…-not-a-real-secret`. Keep blind spot (c).
+4. **The `INIT=` backslash row** — add it as an observation, verbatim: in `@SpringBootTest(properties=…)`, `\\;` failed and `\\\\;` worked. Mechanism `(provisional)`. Attach it to the `:65` row.
+5. **The leniency row** — observation as-is; reader-axis mechanism confirmed; source-kind clause `(provisional)`.
+6. **`CONTAINERS-CONTRACT.md:232`** — delete "and returned with that fetch's response". This is a falsified claim to fix at stage 06, not a backlog row.
+7. **`LEARNINGS.md:133`** — annotate, don't delete. The "entries pointing at vanished cache rows" mechanism is false, because each entry carries its own `image`/`url` inline. The theme decision stands on its other ground.
+8. **Orchestrator note** — endorsed, as a `planner.md` checklist item.
+
+**Backlog seeded (new this cycle only)**
+
+- **Promote to a named row (third time): a Hibernate `java.sql.Timestamp` put into a json-smart object serialises as `{"nanos":N}`.** It has been fixed locally three times: `LEARNINGS.md:65` / `CONTAINERS-CONTRACT.md:244`, `FilterNewsConsoleService.java:263`, `SearchController.java:705`. Add one line under `CLAUDE.md` § *Conventions → Response bodies*.
+- **New human-only row: confirm `news_block.linkspreview` exists on dev and prod after deploy** (`SHOW COLUMNS FROM news_block LIKE 'linkspreview'`). A failed ALTER logs one WARN and boots. The fix-pass guard keeps the old cards, but then every refresh is skipped indefinitely, and the only signal is the `:1147` WARN. Last measured: never.
+- **NOTE-1: an NPE in `performSearchNews` when the property-2 row is missing** (`POST /searchnews` `:1265` → `:1280` → `:1287`). It is mitigated only by `NewsTableSeeder.java:106`, whose `catch` at `:116` swallows a seeding failure. Do not rank this below the seeder's own failure modes.
+- **Make T15 own its rows** (per-test `news` reset, plus a mutation run with T15 executed alone).
+- **The `:716` mutation was caught only by a log-tag assertion.** Give it a behavioural observable; nobody re-measured this after the fix pass.
+- **Corrections to manager's carried rows (2026-10-17):**
+  - Row 2 is closed for the `@IsolatedH2Test` classes. What remains: the three `@ActiveProfiles("test")` classes get no static install, and whether they read a static left behind by an H2 context is unmeasured.
+  - Row 3 (a) is half done: the fixture conversion is done, the widening is not (`NoKeyShapedTestLiteralTest.java:50` is unchanged).
+  - Row 1 is closed by this cycle.
+  - N-B is closed by the fix pass.
+
+### Backlog after this cycle (manager)
+
+**Recommended next objective: cycle B** (user-decided at the 2026-10-18 gate). B covers:
+- widen `NoKeyShapedTestLiteralTest` (base64url, more than 48 characters, `"prop=VALUE"`) with runtime-built self-test samples;
+- convert `ConsoleTokenTest`'s 2 fixtures and fix its "96 characters" javadoc (`:21`; measured at 93/92);
+- pin the blank `?apiKey=` fall-through in behaviour;
+- row 7 (`ApplicationContextRunner`) and row 8 (`normaliseName`).
+
+Riders for `planner` to include or decline:
+- an `.andDo(print` source scan that exempts comments (the known-present control is the prohibition comment at `FilterNewsAgentControllerAuthTest.java:30`);
+- row-2 remainder: do the three `@ActiveProfiles("test")` classes read a static left by an H2 context? B modifies `FilterNewsAgentControllerAuthTest`, so B can measure this.
+
+B also owes `CONSOLE-CONTRACT.md:385` and `:406` a scope clause: a blank query param loses to the header (`FilterNewsAgentController.java:106`). B measures it; stage 06 or `bridge` applies it.
+
+**Human-only actions**
+
+| # | Action | Status | Last measured |
+|---|---|---|---|
+| H1 | Read-only MySQL credential in a brief, or rule out boot-based DB verification | open | never |
+| H2 | Settle `ONELIKE_NEWS_FILTER_APIKEY` in `.env`/`.env.prod` | open; non-blank in the test JVM only | 2026-10-18 A (attributed to verifier) |
+| H3 | Push local commits | `92e34df..18442a0` pushed at user request; A and B landings add more; push only on explicit request | 2026-10-18 A |
+| H4 | **NEW.** Confirm `news_block.linkspreview` on dev and prod after deploy (`SHOW COLUMNS FROM news_block LIKE 'linkspreview'`). A failed ALTER boots anyway; every refresh is then skipped and the cards freeze; the only signal is the WARN at `SearchController.java:1147` | open | never |
+| H5 | Rotate HIBP/Webshare keys with distinct dev/prod values | open | never |
+| H6 | Rotate or remove the `ghp_…` PAT in the Jenkins clone URL | open; not in this worktree | 2026-10-18 A, worktree only |
+| H7 | `JWT_SECRET` parity, issuer vs backend | open, not urgent; substitutes considered: (i) a minted token plus curl needs a running pair, (ii) a fingerprint means a forbidden read, (iii) prod is a deployment fact | never |
+| H8 | Does a proxy strip `Authorization` | open | never |
+| H9 | `SELECT COUNT(*) FROM filter_news WHERE active IS NULL`, dev and prod | open (blocked by H1) | never |
+| H10 | Release `../onelike-agentic` `feature/theme-allowance-ui` whole or not at all | open; branch not checked out (`main`) | 2026-10-18 A |
+
+**Backlog after B, priority-ordered**
+
+1. **NPE in `performSearchNews` when the property-2 row is missing.** `SearchController.java:1286-1287`. Released callers exist in `onelike-agentic`. The only mitigation is `NewsTableSeeder.java:106`, whose catch at `:116` only WARNs. Strongest candidate for cycle C. Last measured: 2026-10-18 A (manager read).
+2. **T15 owns its rows** (per-test `news` reset, plus a mutation run with T15 alone). Rides with the next feed-job cycle. Last measured: never.
+3. **Give the old `:716` mutation a behavioural observable.** The line number has drifted (`:716` is now inside `fallbackCard`'s javadoc), so re-anchor it by method name. Last measured: never.
+4. **Row-2 remainder:** the `@ActiveProfiles("test")` classes get no static install. Unmeasured whether they read an H2 context's leftover static. B is a plausible host. Hatch 0. Last measured: never.
+5. **N5 (2026-10-11 series):** accept the `filter_news` create-race or take an app-level lock. Rides with the next `filter_news` write-path cycle. This is not the N5 of A's rev-1 plan, which was a different, now-done item. Last measured: never.
+6. **`pinned` null-guard in `PinService`** (`PinService.java:67`). Last measured: 2026-10-18 A.
+7. **Observe `refreshed > 0` with live proxies**, plus the malformed-body response shape. Last measured: never.
+8. **The `Item.js` pointer row** (owner `bridge`; the pointers live in `feature/theme-allowance-ui`). Last measured: not measured.
+
+**Stage-06 items** (falsified claims and convention lines, not ranked):
+- the Timestamp `{"nanos"}` convention line (sites: `UserNewsContainerService.java:732`, `FilterNewsConsoleService.java:263`, `SearchController.java:688`);
+- `CLAUDE.md:11` 38 → 63 (manager's `@Test` grep: 63 across 11 files);
+- `CLAUDE.md:92`'s stale fixture sentence;
+- `CLAUDE.md:65` "loud";
+- `CONTAINERS-CONTRACT.md:232`, plus stale line pointers at `:221`/`:234`/`:235`, and `:233` "can dangle" to re-check (owner `bridge`);
+- `CONSOLE-CONTRACT.md:385`/`:406` (measured by B).
+
+**Hatch:** there is no `planner` checklist-10 declaration on disk for A, so nothing is ticked. Row 7 stays at 2 and is hosted in B.
+
+**Dropped:**
+- row 1 (`articlesOf`), done;
+- row 2 for the `@IsolatedH2Test` classes, done;
+- row 4 (`@PostConstruct` warning case), done in AllowanceTest:140-153;
+- human-only `env.backup`, done;
+- N-B, done (it was a rev-0 note, not a carried row).
+
+Do not re-propose these.
+
+### Process review (controller)
+
+The first `controller` run stalled with no output (stream watchdog). The retry produced the list below. The user approved it at the stage-06 gate, choosing "Apply all, plus the short bridge review".
+
+**Controller's orchestrator findings.**
+- (a) Appending the learner note before `manager`: proportionate, and required.
+- (b) Routing "return what was previously fetched" to the running `builder`: **not proportionate**. `AGENTIC-LOOP.md:46-47` already sent it to `planner`. It also missed `:38`, the settled answer never written into the spec (now written; see item 9).
+- (c) The env.backup per-key fingerprint check: proportionate. Small gap: "absent after `rm`" named no instrument; the instrument was a `[ -e ]` test.
+- The orchestrator also missed two things itself:
+  - the `learner` brief carried the stale 37, against `:155`;
+  - a brief carried "`${` = 1" with no instrument, against `:108`.
+- A `bridge` pass was owed at rev 1 and none ran; stage 06 ran it (item 9).
+- **The orchestrator's stage-06 `bridge` brief carried a false premise:** "You own this pinned contract file and may edit it". `bridge.md` § *The durable contract file* says `bridge` authors and the orchestrator transcribes. `bridge` refused correctly and authored the text, which the orchestrator transcribed verbatim.
+
+| # | Recommendation | Completion |
+|---|---|---|
+| 1 | `CLAUDE.md:1` → `2026-10-18-a` | applied |
+| 2 | `CLAUDE.md:11` 38 → 63 per class; two database groups named; `@IsolatedH2Test` replaces "a harness now exists"; `:12` "(MySQL group only)" | applied. "Zero skips" re-read by the orchestrator from the 11 Surefire XMLs (skipped=0 in each; written 2026-10-18 22:30:57–22:31:03) |
+| 3 | `CLAUDE.md:65`: residue (empty-table MySQL ALTER measured), "a failed ALTER is not loud", `INIT=` backslash observation | applied. The command is marked "abridged, not kept verbatim; no mechanism stated" |
+| 4 | `LEARNINGS.md:270` falsified annotation; re-run stem `loud` | applied. `git grep -n -w -i loud` over `*.md`/`src` hits only `CLAUDE.md:65` (the corrected "not loud"), `:270` (the annotation), and `:560`/`:625` (cycle-entry references). Control: `cloudflare` = 1 in `CONTAINERS-CONTRACT.md` |
+| 5 | `CLAUDE.md:92`: replace the four-fixtures clause with the `ConsoleTokenTest.java:28-29` one (not a deletion) | applied |
+| 6 | New *Unsound* row: `Binder.bind` as evidence that a placeholder resolved | applied. "Command not kept verbatim"; the source axis is (provisional) |
+| 7 | `CLAUDE.md:62` md5 row: named extractor, empty-body refusal, must-differ control; mirror into `AGENTIC-LOOP.md:40` and `:94` | applied to all three |
+| 8 | `CLAUDE.md:36` Timestamp `{"nanos"}` convention line | applied |
+| 9 | `CONTAINERS-CONTRACT.md:232` clause deletion, plus a `bridge` pass on `:221-235` | applied. `bridge` authored six edits; the orchestrator transcribed them verbatim: re-anchored `:221`, `:234`, `:235`; `:232` deletion; new settled-at-gate bullet with the user's three quotes; `:233` "can dangle" corrected. File md5 `c7be19f1…` → `0135f5e1…`; LF only (297). `bridge` left `:236` (72h blink) for next cycle |
+| 10 | `LEARNINGS.md:133` mechanism-falsified annotation | applied |
+| 11 | `planner.md` checklist 13: every unit degrades | applied |
+| 12 | `planner.md:38` checklist 8: V-M2 plus `INFORMATION_SCHEMA.COLUMNS` default budget | applied |
+| 13 | `verifier.md:23` (`@IsolatedH2Test` touches no schema) and `:26` (use the harness, not a hand-built `${…}` URL) | applied |
+| 14 | No new AGENTIC-LOOP rule. Sharpen `:47` ("what the change *needs*") and add a `builder.md` refusal for workarounds over a missing column | applied to both |
+| 15 | `CLAUDE.md:94`: a pipeline fingerprint that never prints or writes the value is allowed | applied |
+| 16 | For the next `planner`/orchestrator: hatch verdicts on disk; every count in a brief carries its instrument; B flags "needs bridge" for `linkspreview` dynamics | not applied: guidance for the next cycle, carried into cycle B's brief |
+| 17 | At landing, stage `src/test/resources/META-INF/spring.factories` by path | applied at landing |

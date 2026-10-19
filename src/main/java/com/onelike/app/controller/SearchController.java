@@ -128,10 +128,21 @@ public class SearchController {
 
     @PostConstruct
     private void initStaticDao() {
-        myproxyService = this.proxyService;
-        newsService = this._newsService;
-        newsBlockService = this._newsBlockService;
+        installStaticDao(this.proxyService, this._newsService, this._newsBlockService);
         webshareApiKey = this.webshareApiKeyValue;
+    }
+
+    /**
+     * The single place the three static services are assigned. Package-private
+     * so a test can install its OWN context's services (or a fake proxy pool)
+     * immediately before a case: statics are per class loader, not per Spring
+     * context, so whichever test context was created last would otherwise own
+     * them. The webshare key is deliberately not part of this hook.
+     */
+    static void installStaticDao(MyproxyService proxies, NewsService news, NewsBlockService newsBlocks) {
+        myproxyService = proxies;
+        newsService = news;
+        newsBlockService = newsBlocks;
     }
 
     @GetMapping(value = "/version")
@@ -530,8 +541,21 @@ public class SearchController {
         JSONArray socialmediaList = new JSONArray();
         JSONArray socialmediaListWithoutCategory = new JSONArray();
 
+        // One platform's failure must not cost the other nineteen their refresh.
+        // A platform that throws is NEVER skipped - 19 cards would be a shape
+        // change - it gets the same 7-key card built from its saved news_block
+        // row. fallbackCard guards its own lookup, so a row that cannot be read
+        // (e.g. two rows for one platform and language) costs that platform an
+        // empty card, not the run.
         for (String sm : SocialMediaPlatforms.ALL) {
-            socialmediaList.add(articlesOf(language, sm, socialmediaListWithoutCategory));
+            JSONObject card;
+            try {
+                card = articlesOf(language, sm, socialmediaListWithoutCategory);
+            } catch (Exception e) {
+                log.warn(sm + " " + language + ": the refresh threw (" + e + "), I am keeping what was previously fetched");
+                card = fallbackCard(language, sm, "the refresh threw");
+            }
+            socialmediaList.add(card);
         }
         socialmediaObject.put("socialmedias", socialmediaList);
         socialmediaObjectWithoutCategory.put("news", sortJsonArray(socialmediaListWithoutCategory, language, "AllSocials"));
@@ -557,7 +581,160 @@ public class SearchController {
         return URLEncoder.encode(searchText, StandardCharsets.UTF_8).replace("+", "%20");
     }
 
+    /**
+     * How articlesOf turns its (unconnected) Google News URLConnection into an
+     * XmlReader. Production always passes XmlReader::new, which is what opens
+     * the connection; the seam exists so a test can hand back a reader over
+     * fixed bytes - and override its close() - without any socket.
+     */
+    @FunctionalInterface
+    interface XmlReaderOpener {
+        XmlReader open(URLConnection connection) throws IOException;
+    }
+
+    /**
+     * A platform's last saved feed, as the array the card's "news" key holds.
+     *
+     * Every way a stored feed can be unusable answers an EMPTY array instead of
+     * throwing or leaking a non-array into the card: no block, a null feed, a
+     * feed that does not parse, and a feed that parses to something other than
+     * an array (MODE_PERMISSIVE turns bare text into a String and "{}" into an
+     * object, neither of which a client can iterate). Before this, one corrupt
+     * news_block row made articlesOf throw, and the throw took the other
+     * nineteen platforms' refresh down with it.
+     *
+     * @param site which fallback in articlesOf is asking, for the log line only
+     */
+    static JSONArray savedFeedOf(NewsBlock newsBlock, String language, String searchText, String site) {
+        if (newsBlock == null) {
+            log.debug(searchText + " " + language + ": no saved feed yet (" + site + "), serving []");
+            return new JSONArray();
+        }
+        String feed = newsBlock.getFeed();
+        if (feed == null) {
+            log.warn(searchText + " " + language + ": saved feed is null (" + site + "), serving []");
+            return new JSONArray();
+        }
+        Object parsed;
+        try {
+            parsed = new JSONParser(JSONParser.MODE_PERMISSIVE).parse(feed);
+        } catch (Exception e) {
+            log.warn(searchText + " " + language + ": saved feed does not parse (" + site + "), serving []: " + e);
+            return new JSONArray();
+        }
+        if (!(parsed instanceof JSONArray)) {
+            log.warn(searchText + " " + language + ": saved feed is not an array (" + site + "), serving []");
+            return new JSONArray();
+        }
+        return (JSONArray) parsed;
+    }
+
+    /**
+     * The previews stored next to a platform's saved feed, as the array the
+     * card's "linkspreview" key holds, keeping ONLY the entries whose url is
+     * one of savedNews' urls - so a card never shows a preview of an article it
+     * does not list (and an empty savedNews always means no previews).
+     *
+     * Like savedFeedOf, every unusable input answers an EMPTY array instead of
+     * throwing: no block, a NULL column (every row stored before the column
+     * existed), a value that does not parse, one that parses to a non-array,
+     * and entries that are not objects.
+     *
+     * @param site which fallback in articlesOf is asking, for the log line only
+     */
+    static JSONArray savedLinksPreviewOf(NewsBlock newsBlock, JSONArray savedNews, String language,
+                                         String searchText, String site) {
+        JSONArray kept = new JSONArray();
+        if (newsBlock == null || newsBlock.getLinkspreview() == null || savedNews.isEmpty()) {
+            return kept;
+        }
+        Object parsed;
+        try {
+            parsed = new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getLinkspreview());
+        } catch (Exception e) {
+            log.warn(searchText + " " + language + ": saved previews do not parse (" + site + "), serving []: " + e);
+            return kept;
+        }
+        if (!(parsed instanceof JSONArray)) {
+            log.warn(searchText + " " + language + ": saved previews are not an array (" + site + "), serving []");
+            return kept;
+        }
+        Set<Object> listed = new HashSet<>();
+        for (Object item : savedNews) {
+            if (item instanceof JSONObject && ((JSONObject) item).get("url") != null) {
+                listed.add(((JSONObject) item).get("url"));
+            }
+        }
+        for (Object preview : (JSONArray) parsed) {
+            if (preview instanceof JSONObject && listed.contains(((JSONObject) preview).get("url"))) {
+                kept.add(preview);
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * The card every degraded branch serves: the same seven keys a fresh card
+     * carries, built ONLY from the platform's saved news_block row - no DB
+     * call, no socket, so it cannot throw on account of the row's content.
+     *
+     * - news: the saved feed, through savedFeedOf;
+     * - linkspreview: the previews stored with that feed, through
+     *   savedLinksPreviewOf (filtered to the urls in news);
+     * - last_update: the row's stored `updated`, re-wrapped as a plain
+     *   java.util.Date so it serialises exactly like a fresh card's. A
+     *   Hibernate-loaded value is a java.sql.Timestamp, which json-smart does
+     *   not special-case: it falls through to bean reflection and serialises
+     *   as {"nanos":...} instead of the Date.toString() form (see
+     *   UserNewsContainerService.wireDate). Now when there is no row or no
+     *   stored `updated`.
+     *
+     * @param newsBlock the row as already looked up, or null for none
+     * @param site      which branch is serving it, for the log lines only
+     */
+    static JSONObject savedCard(String language, String searchText, NewsBlock newsBlock, String site) {
+        log.debug(searchText + " " + language + ": serving the saved card (" + site + ")");
+        JSONObject articleObject = new JSONObject();
+        articleObject.put("language", language);
+        articleObject.put("name", searchText);
+        articleObject.put("website", UrlWebsite.getWebsiteUrl(searchText));
+        articleObject.put("description", Description.getDescription(language, searchText));
+        JSONArray savedNews = savedFeedOf(newsBlock, language, searchText, site);
+        articleObject.put("news", savedNews);
+        articleObject.put("linkspreview", savedLinksPreviewOf(newsBlock, savedNews, language, searchText, site));
+        articleObject.put("last_update", newsBlock != null && newsBlock.getUpdated() != null
+                ? new Date(newsBlock.getUpdated().getTime()) : new Date());
+        return articleObject;
+    }
+
+    /**
+     * The card articlesOfAllSocialMedias puts in place of a platform whose
+     * refresh threw: savedCard over a lookup of its news_block row.
+     *
+     * The lookup is guarded. If it throws - e.g. the IncorrectResultSize /
+     * NonUniqueResult that two rows for one platform and language produce -
+     * the platform gets savedCard over no row (empty news, empty previews,
+     * last_update now), still seven keys, and the other platforms' run goes
+     * on. Not covered by the guard: the four static helpers savedCard calls,
+     * none of which touches the DB.
+     */
+    static JSONObject fallbackCard(String language, String searchText, String site) {
+        NewsBlock newsBlock;
+        try {
+            newsBlock = newsBlockService.findBySocialMediaAndLanguage(searchText, language);
+        } catch (Exception e) {
+            log.warn(searchText + " " + language + ": the saved row cannot be read (" + site + "), serving an empty card: " + e);
+            newsBlock = null;
+        }
+        return savedCard(language, searchText, newsBlock, site);
+    }
+
     public static JSONObject articlesOf(String language, String searchText, JSONArray allSocialMedias) throws Exception {
+        return articlesOf(language, searchText, allSocialMedias, XmlReader::new);
+    }
+
+    static JSONObject articlesOf(String language, String searchText, JSONArray allSocialMedias,
+                                 XmlReaderOpener xmlReaderOpener) throws Exception {
         log.debug("--------------- " + searchText + " " + language + " --------------");
         long index = 0;
         boolean proxyAvailable = false;
@@ -579,43 +756,13 @@ public class SearchController {
 
         if (!proxyAvailable) {
             if(myproxyTmp != null){
-                JSONObject articleObject = new JSONObject();
                 log.debug(searchText + " " + language + ": All Proxies " + myproxyTmp.getIp() + ":" + myproxyTmp.getPort() + " not available");
-                articleObject.put("language", language);
-                articleObject.put("name", searchText);
-                articleObject.put("website", UrlWebsite.getWebsiteUrl(searchText));
-                articleObject.put("description", Description.getDescription(language, searchText));
-
                 NewsBlock newsBlock = newsBlockService.findBySocialMediaAndLanguage(searchText, language);
-                if(newsBlock == null){
-                    articleObject.put("news", new JSONArray());
-                }else{
-                    articleObject.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getFeed()));
-                }
-
-                articleObject.put("linkspreview", new JSONArray());
-                articleObject.put("last_update", new Date());
-
-                return articleObject;
+                return savedCard(language, searchText, newsBlock, "all proxies inactive");
             }else{
-                JSONObject articleObject = new JSONObject();
                 log.debug(searchText + " " + language + ": All Proxies not available");
-                articleObject.put("language", language);
-                articleObject.put("name", searchText);
-                articleObject.put("website", UrlWebsite.getWebsiteUrl(searchText));
-                articleObject.put("description", Description.getDescription(language, searchText));
-
                 NewsBlock newsBlock = newsBlockService.findBySocialMediaAndLanguage(searchText, language);
-                if(newsBlock == null){
-                    articleObject.put("news", new JSONArray());
-                }else{
-                    articleObject.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getFeed()));
-                }
-
-                articleObject.put("linkspreview", new JSONArray());
-                articleObject.put("last_update", new Date());
-
-                return articleObject;
+                return savedCard(language, searchText, newsBlock, "no proxy");
             }
         }
 
@@ -638,27 +785,12 @@ public class SearchController {
                 url = new URL("https://news.google.com/rss/search?q=" + betterSearchText + UrlLanguagePath.getUrlLanguagePath(language)).openConnection(proxy);
             }
         } catch (Exception e) {
-            JSONObject articleObject = new JSONObject();
             if(url != null){
                 e.printStackTrace();
                 log.debug(searchText + " " + language + ": Can't reach the URL " + url.getURL());
             }
-            articleObject.put("language", language);
-            articleObject.put("name", searchText);
-            articleObject.put("website", UrlWebsite.getWebsiteUrl(searchText));
-            articleObject.put("description", Description.getDescription(language, searchText));
-
             NewsBlock newsBlock = newsBlockService.findBySocialMediaAndLanguage(searchText, language);
-            if(newsBlock == null){
-                articleObject.put("news", new JSONArray());
-            }else{
-                articleObject.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getFeed()));
-            }
-
-            articleObject.put("linkspreview", new JSONArray());
-            articleObject.put("last_update", new Date());
-
-            return articleObject;
+            return savedCard(language, searchText, newsBlock, "unreachable URL");
         }
 
         url.setConnectTimeout(10000);
@@ -671,7 +803,7 @@ public class SearchController {
         JSONArray arrayForLinksPreview = new JSONArray();
 
         try {
-            xmlReader = new XmlReader(url);
+            xmlReader = xmlReaderOpener.open(url);
             SyndFeed feeder = new SyndFeedInput().build(xmlReader);
 
             // Collect the entries we want first, so the whole feed is decoded in
@@ -710,27 +842,8 @@ public class SearchController {
 
             NewsBlock newsBlock = newsBlockService.findBySocialMediaAndLanguage(searchText, language);
             if(newsArrayJson.size() == 0){
-                if(newsBlock == null){
-                    articleObject.put("news", new JSONArray());
-                }else{
-                    articleObject.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getFeed()));
-                }
-            }else{
-                if(newsBlock == null){
-                    newsBlock = new NewsBlock();
-                    newsBlock.setUpdated(new Date());
-                    newsBlock.setLanguage(language);
-                    newsBlock.setSocialmedia(searchText);
-                }else{
-                    newsBlock.setUpdated(new Date());
-                }
-
-                newsBlock.setFeed(newsArrayJson.toJSONString());
-                articleObject.put("news", newsArrayJson);
-                newsBlockService.save(newsBlock);
+                return savedCard(language, searchText, newsBlock, "empty RSS"); // the finally still closes the reader
             }
-
-            articleObject.put("last_update", new Date());
 
             int numPreviewImages;
             if(language.equalsIgnoreCase("English")){
@@ -751,53 +864,47 @@ public class SearchController {
                 }
             }
             // Works again now that the feed holds real publisher URLs: no browser needed.
-            articleObject.put("linkspreview", giveMeArrayOfLinks(myproxy, arrayForLinksPreview, language, searchText));
+            //
+            // The previews are computed BEFORE the save so the feed and the
+            // previews this card serves go into the row in ONE write per
+            // refresh, and every degraded branch can later serve both from it.
+            // Edge case of that ordering: if giveMeArrayOfLinks threw, the feed
+            // would not be saved either (the catch below serves the saved card
+            // instead). Its only fallible step, ArticleImageCache.resolveAll,
+            // catches internally and answers what it resolved so far.
+            JSONArray linksPreview = giveMeArrayOfLinks(myproxy, arrayForLinksPreview, language, searchText);
+
+            if(newsBlock == null){
+                newsBlock = new NewsBlock();
+                newsBlock.setUpdated(new Date());
+                newsBlock.setLanguage(language);
+                newsBlock.setSocialmedia(searchText);
+            }else{
+                newsBlock.setUpdated(new Date());
+            }
+
+            newsBlock.setFeed(newsArrayJson.toJSONString());
+            newsBlock.setLinkspreview(linksPreview.toJSONString());
+            newsBlockService.save(newsBlock);
+
+            articleObject.put("news", newsArrayJson);
+            articleObject.put("linkspreview", linksPreview);
+            articleObject.put("last_update", new Date());
         } catch (Exception e) {
             e.printStackTrace();
             log.debug(searchText + " " + language + ": Error in reading XML");
-            articleObject.put("language", language);
-            articleObject.put("name", searchText);
-            articleObject.put("website", UrlWebsite.getWebsiteUrl(searchText));
-            articleObject.put("description", Description.getDescription(language, searchText));
-
             NewsBlock newsBlock = newsBlockService.findBySocialMediaAndLanguage(searchText, language);
-            if(newsBlock == null){
-                articleObject.put("news", new JSONArray());
-            }else{
-                articleObject.put("news", new JSONParser(JSONParser.MODE_PERMISSIVE).parse(newsBlock.getFeed()));
-            }
-
-            articleObject.put("linkspreview", new JSONArray());
-            articleObject.put("last_update", new Date());
+            articleObject = savedCard(language, searchText, newsBlock, "unreadable RSS");
         } finally {
             if (xmlReader != null) {
                 try {
                     xmlReader.close();
                 } catch (Exception e) {
-                    e.printStackTrace();
-                    log.debug(searchText + " " + language + ": XmlReader was not closed correctly");
-                    articleObject.put("language", language);
-                    articleObject.put("name", searchText);
-                    articleObject.put("website", UrlWebsite.getWebsiteUrl(searchText));
-                    articleObject.put("description", Description.getDescription(language, searchText));
-                    JSONArray newsArrayJson = sortJsonArray(news, language, searchText);
-
-                    NewsBlock newsBlock = newsBlockService.findBySocialMediaAndLanguage(searchText, language);
-                    if(newsBlock == null){
-                        newsBlock = new NewsBlock();
-                        newsBlock.setUpdated(new Date());
-                        newsBlock.setLanguage(language);
-                        newsBlock.setSocialmedia(searchText);
-                    }else{
-                        newsBlock.setUpdated(new Date());
-                    }
-
-                    newsBlock.setFeed(newsArrayJson.toJSONString());
-                    articleObject.put("news", newsArrayJson);
-                    newsBlockService.save(newsBlock);
-
-                    articleObject.put("linkspreview", new JSONArray());
-                    articleObject.put("last_update", new Date());
+                    // A failed close only logs. It used to overwrite the stored
+                    // feed with the in-memory list - empty whenever the feed had
+                    // no items or failed to parse - destroying a good saved feed
+                    // and replacing the card the try/catch had already built.
+                    log.warn(searchText + " " + language + ": XmlReader was not closed correctly: " + e);
                 }
             }
         }
@@ -958,6 +1065,43 @@ public class SearchController {
         }
     }
 
+    /**
+     * Whether at least one card of the property-1 value
+     * ({"socialmedias":[card, ...]}) carries a non-empty "news" array. A
+     * refresh where none does is never stored: see saveNews.
+     */
+    static boolean anyCardHasNews(JSONObject allSocialNews) {
+        Object cards = allSocialNews.get("socialmedias");
+        if (!(cards instanceof List)) {
+            return false;
+        }
+        for (Object card : (List<?>) cards) {
+            if (card instanceof JSONObject && hasNews((JSONObject) card)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether a JSONObject's "news" key holds a non-empty array: a card, or
+     * the property-2 value {"news":[...]}, which performSearchNews reads.
+     */
+    static boolean hasNews(JSONObject holder) {
+        Object news = holder.get("news");
+        return news instanceof List && !((List<?>) news).isEmpty();
+    }
+
+    /**
+     * Stores one refresh of a language, keeping the last good one:
+     *
+     * - property 1 (the cards GET /service/news serves) only if at least one
+     *   card has news. When every card is a fallback with nothing in it, the
+     *   previous row stays and a WARN names the language.
+     * - property 2 (the flat all-socials list) only if that list is not empty.
+     *
+     * @return true when at least one row was stored, false when none was
+     */
     public static boolean saveNews(String language)  {
         log.debug(language + ": In Save Function");
         News firstNews = null;
@@ -972,11 +1116,18 @@ public class SearchController {
 
         String allSocialNews = null;
         String allSocialNewsWithoutCategory = null;
+        boolean storeCards = false;
+        boolean storeAllSocials = false;
 
         try {
             JSONObject[] TheData = articlesOfAllSocialMedias(language);
             allSocialNews = TheData[0].toJSONString();
             allSocialNewsWithoutCategory = TheData[1].toJSONString();
+            // Keep the last good refresh. Each row is judged on the structure,
+            // never on its serialised text: json-smart writes {"news":[]}, which
+            // the old string guard ("{\"news\" : []}", with spaces) never matched.
+            storeCards = anyCardHasNews(TheData[0]);
+            storeAllSocials = hasNews(TheData[1]);
             log.debug(language + " News was retrieved");
         } catch (Exception e) {
             e.printStackTrace();
@@ -989,34 +1140,50 @@ public class SearchController {
             log.debug(language + " News are not available");
         }
 
-        if (allSocialNewsWithoutCategory != null && !allSocialNewsWithoutCategory.trim().equalsIgnoreCase("{\"news\" : []}")) {
+        if (allSocialNews != null && !storeCards) {
+            // e.g. every news_block lookup threw (two rows per platform, or a
+            // column missing after a failed ALTER): 20 cards with no news would
+            // overwrite the cards users were last served.
+            log.warn(language + ": every card in this refresh has no news, keeping the previous cards");
+        }
+        if (allSocialNewsWithoutCategory != null && !storeAllSocials) {
+            log.warn(language + ": the all-socials list of this refresh is empty, keeping the previous all-socials list");
+        }
+
+        if (storeCards || storeAllSocials) {
             // First run for a language has no rows yet -- create them instead of
             // skipping, which used to leave firstNews/secondNews null and then
             // hand null to the repository ("Entity must not be null").
-            if (firstNews == null) {
-                firstNews = new News();
+            if (storeCards) {
+                if (firstNews == null) {
+                    firstNews = new News();
+                    firstNews.setLanguage(language);
+                    firstNews.setProperty(1);
+                }
+                firstNews.setUpdated(new Date());
+                firstNews.setFeed(allSocialNews);
                 firstNews.setLanguage(language);
                 firstNews.setProperty(1);
             }
-            if (secondNews == null) {
-                secondNews = new News();
+            if (storeAllSocials) {
+                if (secondNews == null) {
+                    secondNews = new News();
+                    secondNews.setLanguage(language);
+                    secondNews.setProperty(2);
+                }
+                secondNews.setUpdated(new Date());
+                secondNews.setAllFeedWithoutCategory(allSocialNewsWithoutCategory);
                 secondNews.setLanguage(language);
                 secondNews.setProperty(2);
             }
 
-            firstNews.setUpdated(new Date());
-            firstNews.setFeed(allSocialNews);
-            firstNews.setLanguage(language);
-            firstNews.setProperty(1);
-
-            secondNews.setUpdated(new Date());
-            secondNews.setAllFeedWithoutCategory(allSocialNewsWithoutCategory);
-            secondNews.setLanguage(language);
-            secondNews.setProperty(2);
-
             try {
-                newsService.save(firstNews, language);
-                newsService.saveEntireFeed(secondNews);
+                if (storeCards) {
+                    newsService.save(firstNews, language);
+                }
+                if (storeAllSocials) {
+                    newsService.saveEntireFeed(secondNews);
+                }
                 log.debug(language + " News was successfully stored in DB");
                 return true;
             } catch (Exception e) {

@@ -898,10 +898,12 @@ public class UserNewsContainerService {
      * articlesOf returns, so the only thing that was ever lost was this small
      * projection, which is why recovering it here is free.
      *
-     * Deliberately NOT stored on NewsBlock: article_image purges negatives, so
-     * a stored snapshot would rot against the cache while the feed it belongs
-     * to is still current. Recompute-on-read always agrees with the cache as it
-     * is now.
+     * NewsBlock does carry a stored copy (news_block.linkspreview, written by
+     * articlesOf in the same save as the feed, and served by SearchController's
+     * degraded branches). The theme read deliberately IGNORES that copy and
+     * recomputes: article_image purges negatives, so a stored snapshot can rot
+     * against the cache while the feed it belongs to is still current, and
+     * recompute-on-read always agrees with the cache as it is now.
      *
      * The first N cut and the 20/11 constants mirror articlesOf exactly, down
      * to the same language.equalsIgnoreCase("English") test, because the feed

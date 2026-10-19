@@ -1,0 +1,2 @@
+# Gives every @IsolatedH2Test class its own in-memory H2 database, named after the class.
+org.springframework.test.context.ContextCustomizerFactory=com.onelike.app.controller.IsolatedH2ContextCustomizerFactory

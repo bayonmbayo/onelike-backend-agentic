@@ -24,8 +24,9 @@ import java.util.Date;
  *   - performSearchNews() parses getAllFeedWithoutCategory(), so null is an NPE.
  *
  * The two rows hold different shapes, so they get different empty values.
- * saveNews() skips writing when a feed equals "{\"news\" : []}", so seeded rows
- * are left alone until there is real content.
+ * saveNews() skips writing a row whose refresh has no news (no card with news
+ * for property 1, an empty "news" list for property 2), so seeded rows are
+ * left alone until there is real content.
  *
  * Runs in @PostConstruct rather than on ApplicationReadyEvent. That event fires
  * AFTER "Started OnelikeBackendApplication" and after the scheduler has already
