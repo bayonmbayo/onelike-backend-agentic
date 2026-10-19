@@ -77,8 +77,10 @@ public class FilterNewsAgentController {
      * already-active name is an idempotent 200, so an agent that retries is
      * safe.
      *
-     * The key is accepted BOTH as ?apiKey= and as the X-API-Key header, with
-     * the query parameter winning when both are present. That is not a
+     * The key is accepted BOTH as ?apiKey= and as the X-API-Key header;
+     * ?apiKey= wins only when it is non-blank
+     * (FilterNewsAgentControllerAuthTest.java:127-128); a blank one falls back
+     * to the header. That is not a
      * preference, it is a copy: the sibling repo's
      * PublicApiController.createDiscussion uses those two names and that
      * precedence, so an agent already written against that API needs no new
@@ -101,7 +103,7 @@ public class FilterNewsAgentController {
                                                        @RequestHeader(value = "X-API-Key", required = false) String headerKey,
                                                        @RequestBody FilterNewsDTO filterNewsDTO) {
         try {
-            // Query parameter wins over the header, matching
+            // ?apiKey= wins only when it is non-blank, else the header, matching
             // PublicApiController.createDiscussion exactly.
             String presentedKey = (apiKey != null && !apiKey.isBlank()) ? apiKey : headerKey;
             agentApiKey.requireValidKey(presentedKey);

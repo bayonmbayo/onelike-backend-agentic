@@ -382,14 +382,14 @@ Not `Authorization: Bearer`. One shared key from the environment (`onelike.news.
 
 Because both sides are trimmed, a key may not meaningfully begin or end with whitespace — surrounding whitespace on a correct key is **accepted**, deliberately, so a copy-paste newline cannot lock an operator out.
 
-Accepted **both** ways, with the **query parameter winning** when both are present:
+Accepted **both** ways. `?apiKey=` wins over `X-API-Key` **only when it is non-blank**; an absent, empty or whitespace-only `?apiKey=` falls back to the header (`FilterNewsAgentController.java:106`, `(apiKey != null && !apiKey.isBlank()) ? apiKey : headerKey`). The fallback half is pinned by `FilterNewsAgentControllerAuthTest.blankApiKeyQueryParameterFallsBackToTheHeader`: an empty and a whitespace `?apiKey=`, each sent with the correct key in the header and a blank name, answer 400 `filternews.name.invalid`, which means they were authenticated through the header. The winning half — a non-blank but wrong `?apiKey=` overriding a correct header, answering 401 — is read from `:106` only. No test sends both transports with a non-blank query parameter.
 
 | transport | name |
 |---|---|
 | query parameter | `?apiKey=…` |
 | header | `X-API-Key: …` |
 
-Those two names and that precedence are copied from the sibling repo's `PublicApiController.createDiscussion`, so an agent already written against that API needs no new convention.
+Those two names and that precedence, including the non-blank condition, are copied from the sibling repo's `PublicApiController.createDiscussion`: `../onelike-backend-jx2-agentic/src/main/java/com/onelike/app/controller/PublicApiController.java:104` reads `(apiKey != null && !apiKey.isBlank()) ? apiKey : headerKey` at jx2 HEAD `ea0f828` (`git show HEAD:… | grep -F 'rawKey ='`, cycle 2026-10-19 B). An agent already written against that API therefore needs no new convention.
 
 **Prefer the header.** A query string is written verbatim to `logs/onelike.log`: both properties files set `logging.level.org.springframework.web=DEBUG`, and `DispatcherServlet`'s request log masks the parameter map but concatenates `getQueryString()` with no guard. The parameter exists for compatibility, not because it is safe.
 
@@ -403,7 +403,7 @@ Two codes, plus the repo-standard catch-all. Same `ApiError` shape as §10.
 | 400 | `filternews.name.invalid` |
 | 500 | varies, may be `null` |
 
-`filternews.apikey.invalid` covers **missing, blank, wrong, and "the server's own key is unset"** with one code and one status, deliberately: distinguishing them would tell a prober whether they have the parameter name right.
+`filternews.apikey.invalid` covers **missing, blank, wrong, and "the server's own key is unset"** with one code and one status, deliberately: distinguishing them would tell a prober whether they have the parameter name right. "Missing" and "blank" mean missing or blank in **both** transports. A blank `?apiKey=` next to a correct `X-API-Key` is not a 401: it falls back to the header and authenticates (see the precedence paragraph above). "Wrong" means the key actually presented is wrong. That includes a non-blank wrong `?apiKey=` sent next to a correct header, because the query parameter wins; that case is read from code and not tested.
 
 **Read it as `body.errors?.[0]`, not `body.errors[0]`.** A malformed or absent request body is rejected by Spring during argument resolution, before this controller's try/catch exists, so the response is Boot's own — with **no `errors` key at all**, undefined rather than null. That path needs no key, so an unauthenticated caller can reach it. Same hole as §10; stated here because an agent author has no reason to read the Console's error section.
 

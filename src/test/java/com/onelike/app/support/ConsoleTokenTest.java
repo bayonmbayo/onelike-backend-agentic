@@ -5,12 +5,14 @@ import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * No Spring context and no database: ConsoleToken takes its secret through the
@@ -18,15 +20,17 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * secret this class mints its own tokens with. Nothing here touches
  * onelike_test.
  *
- * The secret is 96 characters on purpose. Keys.hmacShaKeyFor picks the strongest
- * HMAC algorithm the key length allows, so a secret longer than 64 bytes gives
+ * The secret is at least 64 bytes on purpose. Keys.hmacShaKeyFor picks the strongest
+ * HMAC algorithm the key length allows, so a secret of 64 bytes or more gives
  * HS512 - the same algorithm the real issuer's 94-byte secret selects. A short
  * test secret would exercise HS256 and prove nothing about the live token.
+ * fixtureSecretsSelectHs512 refuses mechanically if either fixture drops below
+ * that, rather than leaving it to this paragraph.
  */
 class ConsoleTokenTest {
 
-    private static final String SECRET = "test-console-secret-test-console-secret-test-console-secret-test-console-secret-test-cons-96c";
-    private static final String OTHER_SECRET = "other-console-secret-other-console-secret-other-console-secret-other-console-secret-othe-96c";
+    private static final String SECRET = "test-fixture-console-token-secret-padded-past-the-sixty-four-byte-hs512-minimum-not-a-real-secret";
+    private static final String OTHER_SECRET = "test-fixture-other-console-token-secret-padded-past-the-sixty-four-byte-hs512-minimum-not-a-real-secret";
 
     private final ConsoleToken consoleToken = new ConsoleToken(SECRET);
 
@@ -115,6 +119,28 @@ class ConsoleTokenTest {
                 () -> consoleToken.requireAdminOrModerator(token));
 
         assertEquals("filternews.unauthorized", e.getMessage());
+    }
+
+    /**
+     * The class javadoc's premise, made mechanical. Both fixture secrets must
+     * be at least 64 UTF-8 bytes, and a token minted with SECRET must carry
+     * alg HS512 in its header - otherwise every case above would be testing
+     * HS256 or HS384 while the live issuer signs HS512.
+     */
+    @Test
+    void fixtureSecretsSelectHs512() throws Exception {
+        assertTrue(SECRET.getBytes(StandardCharsets.UTF_8).length >= 64, "SECRET is under 64 bytes");
+        assertTrue(OTHER_SECRET.getBytes(StandardCharsets.UTF_8).length >= 64, "OTHER_SECRET is under 64 bytes");
+
+        String token = token(SECRET, "ADMIN", "admin@example.com", 3600);
+        String alg = Jwts.parser()
+                .verifyWith(Keys.hmacShaKeyFor(SECRET.getBytes()))
+                .build()
+                .parseSignedClaims(token)
+                .getHeader()
+                .getAlgorithm();
+
+        assertEquals("HS512", alg);
     }
 
     @Test

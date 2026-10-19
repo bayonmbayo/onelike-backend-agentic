@@ -670,3 +670,244 @@ The first `controller` run stalled with no output (stream watchdog). The retry p
 | 15 | `CLAUDE.md:94`: a pipeline fingerprint that never prints or writes the value is allowed | applied |
 | 16 | For the next `planner`/orchestrator: hatch verdicts on disk; every count in a brief carries its instrument; B flags "needs bridge" for `linkspreview` dynamics | not applied: guidance for the next cycle, carried into cycle B's brief |
 | 17 | At landing, stage `src/test/resources/META-INF/spring.factories` by path | applied at landing |
+
+## Cycle — 2026-10-19 B — Key-shaped-literal guard widened, ConsoleTokenTest fixtures converted, blank `?apiKey=` / property boundary / `normaliseName` pinned, `.andDo(print` scan
+
+**Origin.** At the 2026-10-18 gate the user chose "two cycles A then B" and put rows 7 and 8 into B. Later they said "after that, do cycle B and push". Cycle A landed as `c8d844b` and is not yet pushed.
+
+At B's gate the user approved the plan with:
+- **D1:** the `{1,16}` segment cap.
+- **D2:** the stricter redactor, applied at stage 06.
+- **4b:** comments-only, this cycle.
+
+**Orchestrator notes.**
+- `builder`'s first run stalled (stream watchdog, 600s). Before resuming it, the orchestrator checked the worktree:
+  - `git status --porcelain --untracked-files=all` showed 7 test paths;
+  - `git diff --stat HEAD -- src/main` and `-- src/main/resources` were empty;
+  - the comment-stripped md5 of each changed `src/main` file matched HEAD — the list was empty, so nothing was compared;
+  - must-differ control: `SearchController` HEAD~1 vs HEAD, `9f65753c` vs `27e98eac`.
+- Per-class counts (`verifier`, Surefire XML plus two corroborating instruments; zero skips; 84 tests across 14 classes):
+
+| Class | Tests |
+|---|---|
+| context load | 1 |
+| ConsoleToken | 9 |
+| AgentApiKey | 8 |
+| Allowance | 9 |
+| Quota | 4 |
+| FrontInsert | 4 |
+| FeedJob | 17 |
+| IsolatedH2Harness | 6 |
+| FilterNewsAgent | 4 |
+| FilterNewsConsole | 2 |
+| NoKeyShaped | 9 |
+| NoMockMvcPrint | 2 |
+| AgentApiKeyProperty | 3 |
+| FilterNewsNameNormalise | 6 |
+
+- Verifier's verdict: PASS WITH NOTES.
+
+### Learner note (verbatim)
+
+**Correction to the brief.** The brief's stage-06 list leaves out one item that B owed: `CONSOLE-CONTRACT.md:385`/`:406` (2026-10-18 A, manager's backlog). B has now measured it (ruling 7).
+
+**Worked**
+
+- **A plan-time mechanism claim was falsified by a budgeted mutant together with a stop condition.** `planner` read `AgentApiKey.java:77` as having "no observable effect". M7-c (remove `:77`) killed `rejectsEverythingWhenTheConfiguredKeyIsNull`, because a null key passes `:80` and then NPEs on `.trim()` at `:84`. `builder` stopped and reverted 4b as briefed. `verifier`'s M7-b′ (drop only the blank half) survived 84/84, so `planner` was right about one half and wrong about the other. **Rule for `planner`: a compound guard (`a == null || a.trim().isEmpty()`) gets one mutant per disjunct.** One mutant on the whole line cannot tell you which half carries the weight.
+- **A positive control caught a broken zero (F1).** `grep -roiF … | wc -l` returned 0 against a control that also returned 0. The cause was a SIGABRT (rc=134) that `wc -l` turned into a clean 0. This is the second time the absence rule's "pair every zero with a known-present control" has caught a broken instrument (the first was 2026-10-17). **Watch: any count taken through `| wc -l` (or any pipe) discards the producer's exit status.** Check rc or use `pipefail`.
+- **The test orders were varied, not assumed.** V4 ran alphabetical and reversealphabetical with identical counts. That closed the row-2 remainder by measurement: `@PostConstruct` re-installs the statics, and no MySQL-group path reads them (`verifier`).
+- **Resuming a stalled stage after a worktree check worked.** This is the second stream-watchdog stall in two entries (controller, 2026-10-18 A; builder, this cycle). The resume check should name its instrument in the entry (done above).
+
+**Didn't work / watch out for**
+
+- **F3: the guard the user confirmed at the gate misses the most common key encoding.** At `NoKeyShapedTestLiteralTest.java:72` the pattern requires the closing quote directly after the run. A padded `=` is outside the class, so a 44-char `openssl rand -base64 32` / `Base64.getEncoder()` key is not matched. The positive samples at `:165` and `:174` both call `.withoutPadding()`, and so did P12's synthetic set. Root cause is in `planner.md:44` (checklist 12): it budgets samples for formats the loop "has generated or holds". **No stage may read the live key, so its format is unknown by rule, and the sample set must cover the default output of common generators**: padded base64 with one `=` (32 bytes → 44 chars) and with `==` (64 bytes → 88), plus 64-char hex. The gate confirmed a pattern and never saw a padded sample, so the user could not catch this.
+- **D2's redactor very probably shares F3.** Its 0/8 was measured only on unpadded samples. Do not write it into `CLAUDE.md:91` as covering base64 until a padded sample has been run through it.
+- **A masking command printed the literals it was meant to mask.** The command was `perl -ne 'if ($.==28||$.==29) { s/"[^"]*"/"<MASKED len=".(length($&)-2).">"/g } print "$.\t$_"'`. Without `/e` the replacement is an interpolated string, so `$&` (the match) was printed. The structural fault is that the command prints `$_`, the input line after substitution, so any substitution that fails to match or to evaluate passes the value straight through. Only old fake fixtures leaked, and only to tool output. **A masking command prints only derived fields (line number, length, md5), never the input line. It then fails closed, not open.**
+- **Mutation programs were not kept on disk, so `verifier` re-derived its own.** In this cycle that made the evidence stronger (M7-b′ was independent). But nobody can now reproduce builder's M7-c/M7-d as run, and `v/vmut.sh` in the shared scratchpad may have been overwritten. This is the third cycle with "command not kept verbatim", so it is promoted (ruling 5).
+
+**Rulings on the stage-06 candidates**
+
+1. **`CLAUDE.md:11`:** apply 63 → 84 over 14 classes, using `verifier`'s decomposition. Correct the NoKeyShaped description (1 scan plus 8 runtime-built samples). Add the new classes and their groups: NoMockMvcPrint, Property and Normalise have no context and no DB. Bump `:1`.
+2. **`CLAUDE.md:91`:** apply, but not as briefed.
+   - The "28–48 letters and digits" / "`NoKeyShapedTestLiteralTest:50` uses the same pattern" text and the `ConsoleTokenTest.java:23` pointer are stale.
+   - Write the D2 redactor in verbatim, with its measured scope in the same sentence, *unless* the orchestrator first runs padded samples (44- and 88-char) through it and reports the leak count.
+   - Add the guard's blind spots by pointer (`NoKeyShapedTestLiteralTest.java:42-52`).
+3. **`CLAUDE.md:93`:** apply. "28–48" and "the two `ConsoleTokenTest.java:28-29` secrets predate it" are false now. "It does not require the convention" stays.
+4. **F1:** add the *Unsound* row now.
+   - The observation goes in verbatim, with the mechanism (provisional).
+   - Substitutes: `grep -i -e`, `git grep -i -F`.
+   - Same row: "a pipe's count discards the producer's exit status".
+5. **Mutation persistence:** promote to a rule.
+   - Every mutant and every discarded or masking command is written to a file under `<scratchpad>/<stage>-<cycle>/` and executed from that file.
+   - The report cites path plus md5.
+   - Files are kept until landing.
+6. **The `/e` slip:** add a sentence to § *Credential handling*. A masking or inspection command prints only derived fields, never the input line. Run it first on a synthetic canary file.
+7. **The precedence scope clause, now measured.** `FilterNewsAgentControllerAuthTest.java:138` shows that a blank `?apiKey=` loses to the header. There are three unscoped instances:
+   - `CONSOLE-CONTRACT.md:385` (`bridge` authors, the orchestrator transcribes; `:406` "blank → 401" also needs "blank in both transports");
+   - `FilterNewsAgentController.java:81` and `:104` (transcription, citing the scoped `FilterNewsAgentControllerAuthTest.java:127-128` verbatim).
+8. **F2:** a comment-only `builder` pass on `AgentApiKey.java:75-76` and `AgentApiKeyTest.java:98-101`. The text carries three facts:
+   - the null half of `:77` stops an NPE at `:84`;
+   - a null key comes only from direct construction;
+   - the blank half is redundant with `:80` (M7-b′).
+   The orchestrator re-derives the md5s.
+9. **F3:** fix before landing, as a `builder` fix pass plus a scoped `verifier` re-run. The user decides, because the pattern was user-confirmed.
+   - Scope: `:72` → `{28,}={0,2}\"`; padded samples (44 and 88 characters); a raw-hit false-positive count; one mutant (drop `={0,2}`); padded samples added to D2's check; generator-default samples added to `planner.md:44`.
+   - If the user declines, `:91`/`:93` and the javadoc must name padded base64 as a blind spot.
+
+**Backlog seeded (new this cycle only)**
+
+- **`IsolatedH2Extension.beforeEach` snapshots the statics *after* the H2 context's `@PostConstruct`** (`:72-77`), so `afterEach` (`:96-101`) restores H2 beans. `verifier` says this is not reachable today. Fix: snapshot before context load, or assert the restored values are not H2 beans.
+- **F5: `AgentApiKeyPropertyTest` reads only `application.properties`.** Parameterise it over `application.prod.properties` too; both read `${ONELIKE_NEWS_FILTER_APIKEY}` at `:207` today.
+- **planner.md checklist 12 amendment:** generator-default formats in the sample set.
+- **Recurrence watch: stream-watchdog stalls, 2 of 3.** The next occurrence promotes to a resume protocol with a named worktree-state instrument.
+- **Cross-repo, not this repo's row:** `../onelike-backend-jx2-agentic/.../PublicApiController.java:234` publishes the same unscoped "query parameter wins" to API clients.
+- **Closed:** row 7 (`AgentApiKeyPropertyTest`, 3), row 8 (`FilterNewsNameNormaliseTest`, 6), the `.andDo(print` rider (`NoMockMvcPrintTest`, 2), the row-2 remainder (V4), the ConsoleTokenTest fixture conversion and its "96 characters" javadoc. Row 3 (a) is closed except for F3. `CONSOLE-CONTRACT.md:385`/`:406` closes only when ruling 7 is applied.
+
+### Backlog after this cycle (manager)
+
+**Since the entry was written:** at the stage-06 gate the user chose "Fix it now" for F3. A `builder` fix pass covers F3 and F2. Both are treated as in flight here, not as backlog.
+
+**Recommended next objective (C), not chosen by the user:** make `performSearchNews` survive a missing or empty property-2 `News` row.
+- The bug: `SearchController.java:1286-1287` dereferences without a null check, and the `:1266` handler has no try/catch. This is the only open row that the released client reaches: 15 call sites, plus 15 frontend dispatchers in `SearchBox.js:129-171`.
+- The only mitigation is `NewsTableSeeder.java:106-118`, which only WARNs. A row whose feed column is null is a second NPE path; it was read, not run.
+- **Gate decision:** empty `{"news":[]}` or an `ApiError`. The `ApiError` option needs `bridge`.
+- The dependent pinned spec is `CONSOLE-CONTRACT.md:283`, at least one backend cycle old.
+
+**Human-only actions**
+
+| # | Action | Status | Last measured |
+|---|---|---|---|
+| H1 | Read-only MySQL credential in a brief, or rule out boot-based DB verification | open | never |
+| H2 | Settle `ONELIKE_NEWS_FILTER_APIKEY` in `.env`/`.env.prod` | open; non-blank in the test JVM only | 2026-10-19 B (attributed) |
+| H3 | Push local commits | user-requested ("after that, do cycle B and push"); A `c8d844b` and B land first | not by manager |
+| H4 | Confirm `news_block.linkspreview` on dev and prod after deploy | open | never |
+| H5 | Rotate HIBP/Webshare keys with distinct dev/prod values | open | never |
+| H6 | Rotate or remove the `ghp_…` PAT in the Jenkins clone URL | open | 2026-10-19 B, worktree only (`ghp_[A-Za-z0-9]{10,}` = 0; control: `ghp_` = 9, all prose) |
+| H7 | `JWT_SECRET` parity, issuer vs backend | open, not urgent. Substitutes: (i) minted token plus curl needs a running pair; (ii) a fingerprint means a forbidden read; (iii) prod is a deployment fact | never |
+| H8 | Does a proxy strip `Authorization` | open | never |
+| H9 | `SELECT COUNT(*) FROM filter_news WHERE active IS NULL`, dev and prod | open, blocked by H1 | never |
+| H10 | Release `feature/theme-allowance-ui` whole or not at all | open | 2026-10-19 B (`main` checked out; branch ref exists) |
+
+**Backlog, priority-ordered**
+
+1. **The `performSearchNews` NPE**, the recommended objective C. Last measured: 2026-10-19 B, read.
+2. **F5:** parameterise `AgentApiKeyPropertyTest` over `application.prod.properties` (`AgentApiKeyPropertyTest.java:61`; both files at `:207`). Hatch 0. Last measured: 2026-10-19 B.
+3. **T15 owns its rows** (`SearchControllerFeedJobTest.java:734`). Rides with the next feed-job cycle. Hatch 0. Last measured: never.
+4. **Behavioural observable for the old `:716` mutation.** `fallbackCard` is now at `:721`, with its call at `:556`. Rides with row 3. Last measured: never.
+5. **`IsolatedH2Extension` snapshot timing** (`:60` context, `:72-77` snapshot, `:96-103` restore). Rides with the next harness change. Last measured: 2026-10-19 B, read.
+6. **N5 (2026-10-11 series):** the `filter_news` create-race. Rides with the next `filter_news` write-path cycle. Last measured: 2026-10-19 B (weak zero, no control).
+7. **`pinned` null-guard in `PinService`** (`:67`). Last measured: 2026-10-19 B.
+8. **Observe `refreshed > 0` with live proxies**, plus the malformed-body response shape. Last measured: never.
+9. **`Item.js` pointer row** (owner `bridge`). Last measured: not measured.
+
+**Process rows (stage 06):**
+- Stream-watchdog recurrence watch, 2 of 3. Owner: `controller`.
+- `planner.md:44` checklist-12 generator-default samples: a process edit for stage 06, not carried.
+
+**Stage-06 items owed by B:**
+- ruling 1, `CLAUDE.md:11`;
+- ruling 7, precedence scope at `CONSOLE-CONTRACT.md:385`/`:406` (`bridge` authors) and at `FilterNewsAgentController.java:81`/`:104` (transcription);
+- rulings 2–6. Rulings 2 and 3 wait on the F3 outcome.
+
+**Cross-repo handoff:** `../onelike-backend-jx2-agentic` `PublicApiController.java:103` and `:234` publish the unscoped "query param wins" while its `:104` falls back on blank. Give that repo's loop B's measurement (`FilterNewsAgentControllerAuthTest.java:127-128`, `:138`).
+
+**Hatch:** there is no checklist-10 declaration in B's entry (the plan declared its riders in the report only). Nothing is ticked.
+
+**Dropped** (do not re-propose):
+- row 7, `AgentApiKeyPropertyTest`, 3 tests (hatch retires);
+- row 8, `FilterNewsNameNormaliseTest`, 6 tests;
+- the `.andDo(print` rider, `NoMockMvcPrintTest`, 2 tests;
+- the row-2 remainder (V4);
+- the ConsoleTokenTest fixture conversion and its javadoc;
+- 3(a), closed except for F3, which is in flight.
+
+### Gate record (transcribed at stage 06 from the orchestrator's context and `planner`'s report, not written at the gate)
+
+The gate answers below are verbatim.
+
+| Decision | Answer | What it approved |
+|---|---|---|
+| Plan | "Approve (Recommended)" | |
+| D1 | "Yes, add the limit (Recommended)" | the `{1,16}` segment cap |
+| D2 | "Stricter filter (Recommended)" | the redactor `sed -E 's/(^|[-+"'\''=:[:space:]])[A-Za-z0-9+\/_.-]{28,}/\1<REDACTED>/g'` |
+| 4b | "Yes, comments only, in this cycle (Recommended)" | |
+| Post-verifier F3 | "Fix it now (Recommended)" | |
+| Stage 06 | "Apply all, commit, push (Recommended)" | |
+
+F2 is 4b re-done with measured text, so it falls inside the 4b approval.
+
+`planner`'s checklist-10 riders:
+
+| Row | Host file | Include/decline | Hatch verdict |
+|---|---|---|---|
+| `.andDo(print` scan | `support/` guard package | included (task 6) | host in change list |
+| Row-2 remainder | `FilterNewsAgentControllerAuthTest` | included as a measurement (V4) | host in change list; closed |
+| `CONSOLE-CONTRACT.md:385`/`:406` | the contract | included (task 8) | host in change list; applied at stage 06 |
+| Row 7 `ApplicationContextRunner` | `AgentApiKeyPropertyTest` (new) | included (task 4) | closed; hatch retires |
+| Row 8 `normaliseName` | `FilterNewsNameNormaliseTest` (new) | included (task 5) | closed |
+| N5 `filter_news` create-race | `FilterNewsConsoleService` | declined | read-only this cycle: tick |
+
+Fix-pass re-check (`verifier`, PASS WITH NOTES). Per-class Surefire XML, 14 files, zero skips, total 87:
+
+| Class | Tests |
+|---|---|
+| context load | 1 |
+| FilterNewsAgent | 4 |
+| FilterNewsConsole | 2 |
+| IsolatedH2Harness | 6 |
+| FeedJob | 17 |
+| FrontInsert | 4 |
+| Quota | 4 |
+| FilterNewsNameNormalise | 6 |
+| Allowance | 9 |
+| AgentApiKeyProperty | 3 |
+| AgentApiKey | 8 |
+| ConsoleToken | 9 |
+| NoKeyShaped | 12 |
+| NoMockMvcPrint | 2 |
+
+- **F3:** F3-M fails exactly samples I and J, while the other 13 classes pass. The raw hits are 16, with 0 unexempt, on two instruments.
+- **F2:** the change is comment-only by `verifier`'s own stripper and extractor, with refusals and a must-differ control.
+- **D2:** 0/200 padded keys leaked.
+- **Wording nit:** `verifier` noted the "500" in the `AgentApiKey` comment holds only on the controller path. Left as is; a directly constructed caller gets the raw NPE.
+
+### Process review (controller)
+
+The controller ran without stalling, on a targeted-reads brief. The stream-watchdog watch stays at 2 of 3. If it is promoted, the resume protocol is:
+1. `git status --porcelain --untracked-files=all`
+2. `git diff --stat HEAD -- src/main`
+3. comment-stripped md5 per changed file, with the extractor and normaliser named
+4. one must-differ control
+5. delete `target/classes` for the touched classes, or `./mvnw clean`, before resuming
+
+**Controller's orchestrator findings:**
+- (a) Resume check: proportionate. Gaps: the extractor was not named beside the hashes, `target/classes` was not cleared, and the 7 test paths were not hashed at the stall.
+- (b) Learner and manager sections were on time. Two misses: D2's verbatim text was not on disk until now, and the "two corroborating instruments" were unnamed. They were the Surefire console lines and a perl `<testcase>` count (`verifier`), plus an `@Test` source grep.
+- (c) Asking the user about F3: proportionate, and required.
+- (d) Combining F3 and F2: acceptable only because they touched different files. F2's before-baseline for `AgentApiKeyTest.java` was not HEAD; `verifier` re-derived it against its own previous-run copy and HEAD and found it comment-only.
+
+| # | Recommendation | Completion |
+|---|---|---|
+| 1 | `CLAUDE.md:1` → `2026-10-19-a`; `:11` from `verifier`'s re-check decomposition (87, 14 classes) | applied |
+| 2 | `CLAUDE.md:91` redactor: D2 verbatim, with its measured scope; padded result | applied. N = 0/200, so "covers padded base64". The guard is described separately |
+| 3 | `CLAUDE.md:93` guard description (`:78` pattern, `:45-58` blind spots) | applied. The blind-spot range is `:45-58`, not the controller's `:45-56`, after a re-read showed the list ends at `:58` |
+| 4 | Mutation persistence: `CLAUDE.md:54`, plus pointers in `builder.md` and `verifier.md` | applied |
+| 5 | `planner.md:44` generator-default samples | applied |
+| 6 | One mutant per disjunct (`planner.md` checklist 12) | applied |
+| 7 | F1 *Unsound* row, and the pipe-exit-status *composition* row | applied as two rows |
+| 8 | Masking prints derived fields only (`CLAUDE.md` § Credential handling) | applied |
+| 9 | Gate record rule at `AGENTIC-LOOP.md:38`; `planner.md:40` emits checklist 10 as a table; B's table transcribed | applied (table above) |
+| 10 | `AGENTIC-LOOP.md:94` (ii): the before-baseline is the bytes before the pass; never in the same file as an executable fix | applied |
+| 11 | Ruling 7: `FilterNewsAgentController.java:80-81`/`:104` transcription; `CONSOLE-CONTRACT.md:385`/`:392`/`:406` via `bridge` | applied. Controller comments are comment-only by the orchestrator's `orch-B/strip.pl` (md5 `e4c896a8…`): stripped `30bb865d…` before = after; must-differ `isEmpty` control `d7566f82…`; empty input refused (rc 255). `bridge` authored the 3 contract edits, transcribed verbatim; its stem search found no other unscoped hit in the contract. The jx2 `PublicApiController.java:234` remains a cross-repo handoff |
+| 12 | Stream-watchdog: hold at 2 of 3, protocol text on disk | applied (above) |
+| 13 | Guidance for the next `planner` (objective C) | not applied: carried to the next brief, and recorded here so it is on disk |
+
+**User question during stage 06, answered in conversation and not a cycle:** thread configuration at about 1000 users/day. Orchestrator code-read findings, not measured at runtime:
+- `server.tomcat.max-threads=2500` uses the pre-Boot-3 key name and is very likely ignored (Boot 3.1 reads `server.tomcat.threads.max`; Tomcat's default is 200).
+- Hikari `maximumPoolSize=20` is the real concurrency bound.
+- `spring.task.scheduling.pool.size=10` runs 19 `@Scheduled` methods.
+- `onelikeTaskExecutor` is unused (0 `@Async`/`@EnableAsync`).
+- The `spring.quartz.*` properties have no starter.
+- The Tomcat access log is off.
+
+Candidate cycle, if the user asks: tune `server.tomcat.threads.max`/`accept-count`, remove the dead config, enable the access log. It must go through `planner`, which should measure the effective Tomcat thread count rather than infer it.

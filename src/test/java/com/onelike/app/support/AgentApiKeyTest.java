@@ -20,13 +20,13 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
  * no leading or trailing whitespace of its own.
  *
  * New credential-shaped fixtures in src/test follow the
- * test-fixture-...-not-a-real-secret convention. The hyphens mean such a
- * literal can never match the redactor pattern (a quoted run of 28 to 48
- * letters and digits), which NoKeyShapedTestLiteralTest refuses in
- * src/test/java. Older fixtures are not all converted: the four jwt.secret
- * and onelike.news.filter.apikey property strings in
- * UserNewsContainerFrontInsertTest and UserNewsContainerQuotaTest predate the
- * convention and do not follow it (backlog row (a), 2026-10-17).
+ * test-fixture-...-not-a-real-secret convention. Such a literal DOES match
+ * NoKeyShapedTestLiteralTest's raw pattern - its class now includes - and _ -
+ * and passes that scan only by the convention exemption, which requires every
+ * segment to be 1 to 16 lowercase letters or digits. The property-string
+ * fixtures for jwt.secret and onelike.news.filter.apikey now live in one
+ * place, IsolatedH2Test.java:86-87, rather than in the individual H2 test
+ * classes.
  */
 class AgentApiKeyTest {
 
@@ -95,10 +95,12 @@ class AgentApiKeyTest {
     }
 
     /**
-     * Fails closed. This is the case that would otherwise authenticate every
-     * caller: with a blank configured key, an equally blank presented key
-     * compares equal. The property has no inline default so the app should
-     * refuse to start first, but the guard must not depend on that.
+     * Fails closed. A blank configured key is what production injects when
+     * ONELIKE_NEWS_FILTER_APIKEY is present but empty (AgentApiKeyPropertyTest);
+     * an absent variable refuses to start the app instead. A blank presented
+     * key is rejected by the presented-key check whatever the configured key
+     * is, so the blank half of the configured-key check is defence in depth:
+     * dropping it alone leaves every case here passing.
      */
     @Test
     void rejectsEverythingWhenTheConfiguredKeyIsBlank() {

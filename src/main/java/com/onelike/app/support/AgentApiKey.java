@@ -72,8 +72,14 @@ public class AgentApiKey {
      *   another comment warning about it.
      */
     public void requireValidKey(String presented) throws FilterNewsException {
-        // Fails closed. Without this, an unset or blank server key would make
-        // an empty presented key compare equal and authenticate every caller.
+        // Fails closed. The null half is what stops a NullPointerException at
+        // apikey.trim() below when the configured key is null and a non-blank
+        // key is presented: without it that caller gets a 500, still not an
+        // authentication. A null key comes only from direct construction - in
+        // production Spring refuses to start when ONELIKE_NEWS_FILTER_APIKEY is
+        // absent, and injects "" when it is empty. The blank half is redundant
+        // with the presented-key check below plus MessageDigest.isEqual, and is
+        // kept as defence in depth.
         if (apikey == null || apikey.trim().isEmpty()) {
             throw new FilterNewsException(CODE_INVALID);
         }
