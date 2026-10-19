@@ -911,3 +911,172 @@ The controller ran without stalling, on a targeted-reads brief. The stream-watch
 - The Tomcat access log is off.
 
 Candidate cycle, if the user asks: tune `server.tomcat.threads.max`/`accept-count`, remove the dead config, enable the access log. It must go through `planner`, which should measure the effective Tomcat thread count rather than infer it.
+
+## Cycle — 2026-10-19 C — Prod access log with request time (no query string, no IP), dead thread/Quartz config cleaned up, `AgentApiKeyPropertyTest` over prod properties
+
+**Origin.** The user asked: "we have actually 1000 users pro day, what would you suggest about the thread configuration?", then "The refresh process takes sometime 1 min at frontend, that's why I would like to config threads, or looking for other optimization", then "it's about the Social News page load".
+
+**Planner's diagnosis.** Thread settings cannot explain a 1-minute load at this traffic.
+- `server.tomcat.max-threads` is **ignored**. Instrument: `spring-configuration-metadata.json` in `spring-boot-autoconfigure-3.1.3.jar` has 0 `max-threads` keys out of 1558, and `javap` shows `ServerProperties$Tomcat` has `getThreads()` and no `setMaxThreads`; control: `getConnectionTimeout` found. So the effective value is the 200 default.
+- Each `/news` returns in 0.11–0.28 s; 15 concurrent requests all finished within 1.19 s. Instrument: `curl -w`, anonymous public prod GETs, 2026-10-19 12:36–12:38 UTC.
+- **A page load downloads 2,744,007 bytes gzip / 10,170,834 bytes JSON**, because the frontend fetches all 15 languages (`Home.js:396-419`). Instrument: sum of `curl %{size_download}`.
+- **Orchestrator note:** `planner` sent those prod requests on its own initiative: 15 + 15 + 30 + 6 anonymous GETs, about four page loads. They were harmless, but an outward-facing action is confirmed first. Future briefs say so.
+
+**Gate answers (verbatim, recorded before `builder`):**
+- Plan C: "Approve (Recommended)".
+- Access log: "Prod only, no IPs (Recommended)". The planner's recommended pattern is `%t %m %U %s %b %{ms}T` in `application.prod.properties`, with `directory=/logs` and `max-days=14`. Never `%r`, `%q`, `common`, `combined`, or a header that carries a key.
+- Frontend single-language cycle: "Not yet". Not started; carried as the measured fix for the 1-minute load.
+- Threads: "threads.max=200, keep executor (Recommended)". `server.tomcat.threads.max=200` replaces the dead line in both files; `onelikeTaskExecutor` stays; the `spring.quartz.*` lines are removed.
+
+**`planner`'s checklist-10 table (verbatim):**
+
+| Row | Host file | Include/decline | Hatch verdict |
+|---|---|---|---|
+| F5, prod properties in `AgentApiKeyPropertyTest` | `AgentApiKeyPropertyTest.java` | include (task 5) | host in change list |
+| 1, `performSearchNews` NPE | `SearchController.java` | decline (search out of scope) | read-only this cycle: tick |
+| 3, T15 owns its rows | `SearchControllerFeedJobTest.java` | decline | read-only: tick |
+| 4, `fallbackCard` observable | `SearchController.java` | decline | read-only: tick |
+| 5, `IsolatedH2Extension` snapshot timing | `IsolatedH2Extension.java` | decline (used, not changed) | read-only: tick |
+| 6, N5 `filter_news` create-race | `FilterNewsConsoleService.java` | decline | no plausible host: tick |
+| 7, `PinService` null-guard | `PinService.java` | decline | no plausible host: tick |
+| 8, `refreshed > 0` live proxies | — | decline | no plausible host: tick |
+| 9, `Item.js` pointer | frontend | decline | no plausible host: tick |
+
+**Post-build gate answer (verbatim):** `builder` found that nothing in the repo shows how prod loads `application.prod.properties`: Boot does not auto-load that name; 0 hits for `SPRING_CONFIG`/`SPRING_PROFILES`/`spring.config`/`profiles.active`; control: `application.prod` in 4 files. Asked how production uses it, the user answered: "Copied over application.properties at deploy". So the prod access-log lines take effect after deploy. This is a deployment fact, held on the user's word; the repo cannot show it.
+
+**Verifier (stage 03): PASS WITH NOTES.** 118 tests over 16 classes, zero skips (Surefire XML plus a `<testcase>` count).
+- `%{ms}T` was confirmed as milliseconds from a real Tomcat log line, with `%D`/`%T` must-differ controls.
+- Leak check: 0 hits for the synthetic `apiKey`, `uuid`, `X-API-Key` and IP values, while the control pattern caught each one.
+- Notes N1–N3 are below.
+
+### Learner note (verbatim)
+
+**Worked**
+
+- **The diagnosis changed the objective before any code was written.** The user asked about threads. `planner` measured instead of inferring, as stage 06 of 2026-10-19 B had asked (`LEARNINGS.md:913`). It found that `max-threads` is dead (metadata 0/1558, `javap` shows no setter, control `getConnectionTimeout`), that `/news` takes 0.11–0.28 s, and that one page load downloads 10.2 MB of JSON (`LEARNINGS.md:920-922`). **Rule for `planner`: when a user names a cause ("threads"), measure the effect they reported (the 1-minute load) end to end before planning the named cause.** This cycle's real fix is the cross-repo row below, not anything that landed.
+- **Must-differ controls kept the runtime claims honest.** `TomcatThreadsMaxTest` reads the real connector executor and uses 37 as a control value. The `%{ms}T` check used a real Tomcat log line with `%D`/`%T` controls. The leak check's control pattern caught all of its synthetic values (`verifier`). Each of these would have shown a different output if its claim were false, which a check without a control would not.
+- **The deployment blocker was asked, not assumed.** `builder` searched for how prod loads its config and found 0 hits for `SPRING_CONFIG`/`SPRING_PROFILES`/`spring.config`/`profiles.active`, with the control `application.prod` found in 4 files. It then asked, and the user answered.
+
+**Didn't work / watch out for**
+
+- **Mutation persistence failed in its first cycle as a rule.** `builder` cited `mutate.pl` and its md5, but `verifier` could not find (ix)'s definition on disk. That is the fourth cycle running in which a command could not be reproduced, and the first since the rule was written at `CLAUDE.md:54`. The rule produces a *citation* and nothing checks what the citation points to. `AGENTIC-LOOP.md:82` forbids a third restatement, so the fix has to be a visibility mechanism (ruling 5).
+- **`builder`'s "(viii) is killed only by the guard" was stated wider than it was measured.** `verifier`'s dev-file (viii) is also killed by `TomcatThreadsMaxTest[1]`. This is the fourth instance of `AGENTIC-LOOP.md` § *Generalising past the measured scope*, triggered by the word "only", and the subject that was widened was *a file*, not a method. **When a test is parameterised over both property files, a mutant's kill set is reported per file.**
+- **"`CLAUDE.md:54`" did match.** The mutation-persistence rule is the last three sentences of the :54 paragraph. `builder`'s citation was correct but hard to find. Do not split the paragraph: it would shift every later `CLAUDE.md:NN` citation.
+- **The substitute in `CLAUDE.md:83` is unsound for the question that created the row.** F1 was a leak count over `target/surefire-reports`. `git grep` searches only tracked files, and `target/` is ignored (`.gitignore:5`). So `git grep -i -F` over that directory returns a silent 0, and only `--no-index` would make it search there. `verifier`'s discarded `git grep -i -F` run fits that explanation, but it is not confirmed.
+- **Outward calls without consent.** `planner` sent 66 anonymous GETs to prod. The measurement was the most valuable one this cycle took. What was missing was consent. The rule is "propose and confirm", not "never" (ruling 4).
+- **Correction to an earlier entry.** `LEARNINGS.md:906` said `max-threads` was "very likely ignored". It is now measured as ignored, by metadata, `javap` and runtime binding. `LEARNINGS.md:911` ("the Tomcat access log is off") was true then and is now false for `application.prod.properties:10`.
+
+**Rulings on the stage-06 candidates**
+
+1. **`CLAUDE.md:11` test count: apply.** Change 87 → 118 and 14 → 16 classes, from `verifier`'s Surefire XML. Add `ServerPropertiesGuardTest` 24 and `TomcatThreadsMaxTest` 4 (a real embedded Tomcat on 127.0.0.1:0, no DB). Change `AgentApiKeyPropertyTest` 3 → 6, "over both property files". Bump `:1`. The `@Test`-file corroboration counts *files*, never tests, and the sentence should say so.
+2. **`CLAUDE.md:83`, `grep -i`: apply, in two parts.**
+   - Observation: `grep -i -e A -e Z` aborts with rc=134 (`builder`). Narrow the substitute to "`grep -i -e PATTERN` with exactly **one** `-e`".
+   - Scope `git grep -i -F` to tracked files. For ignored paths, `git grep --no-index -i -F` is unmeasured here.
+   - The mechanism stays (provisional).
+3. **New *Sound* row, "does this Spring Boot property take effect":** read the consuming component's runtime value in a booted context, with a must-differ control value (`TomcatThreadsMaxTest`: 200, and 37 as the control). Metadata and `javap` are supporting absence claims, each needing a known-present control. Cross-reference `:81`. Boot does not warn on unknown keys, so a clean boot is not evidence.
+4. **The outward-network rule: put it in `CLAUDE.md`, with a pointer in `planner.md`.**
+   - No stage sends a request to a host other than localhost/127.0.0.1 without the user's confirmation. That covers prod, the communo backend and third-party APIs, and covers anonymous GETs too. Propose the exact command, host and request count as a gate question.
+   - Any report that made outward requests lists host + count.
+   - A permission-settings deny is the user's configuration to change; offer it, do not apply it.
+5. **Mutation persistence, the visibility mechanism:** add to `verifier.md` rule 9: "Before re-deriving, hash each mutant file `builder` cited and list which mutant IDs it defines. A cited path that is missing, has a mismatched md5, or lacks an ID is a finding."
+6. **Deployment fact in `CLAUDE.md` § Commands:** prod copies `application.prod.properties` over `application.properties` at deploy (user's word, 2026-10-19 C; the repo cannot show it).
+
+**Backlog seeded (new this cycle only)**
+
+- **N1: the access-log guard is a denylist.** It misses `%{…}c`, `%S`, `%{…}s`, `%u` and `%{remote}p`, and mutant own2 survives. Fix: an allowlist that refuses any token outside `%t %m %U %s %b %{ms}T`, which kills own2. own3 is inherent residue. Hatch: `ServerPropertiesGuardTest`.
+- **N2: game usernames reach `/logs` (user decision).** `%U` logs `/roosbreaker/{username}` (`RoosBreakerController.java:44`). It is the only path-variable mapping under `src/main/java` (Grep `Mapping\(.*\{` = 1; that hit is the control). Options: accept it; mask that path; or move the username to a parameter, which changes the wire and needs `bridge`.
+- **N3: the 64 KB request-header limit has never taken effect (user decision; predates this cycle).** `server.tomcat.max-http-header-size=65536` is ignored in both files (dev `:10`, prod `:14`); the effective limit is 8192 (`verifier`, runtime binding). Options: rename it to `server.max-http-request-header-size`, which is a behaviour change, or delete the line, which is zero change.
+- **Two more dead keys, `server.tomcat.accesslog.delay` and `server.tomcat.accesslog.buffer-size`**, at `:8-9` in both files. Confirm they are dead with the ruling-3 instrument before deleting either.
+- **Cross-repo, frontend: load one language on the Social News page.** Parked; the user said "Not yet". This is the measured fix for the 1-minute load. It belongs to `../onelike-agentic`'s loop; a backend `/news?lang=` change would need `bridge`.
+- **Closed:** F5 (`AgentApiKeyPropertyTest` over prod properties, 6 tests); the 2026-10-19 B thread-configuration question.
+
+### Backlog after this cycle (manager)
+
+**Recommended next objective:** make `performSearchNews` survive a missing property-2 row or a null feed column (`SearchController.java:1286-1287`; the `:1266` handler has no try/catch). It is the only open backend row the released client reaches. It is **not** the fix for the 1-minute page load.
+
+**Gate questions (user decisions):**
+- **G1 (N2):** usernames in `/logs` via `/roosbreaker/{username}` (`RoosBreakerController.java:44`; the only path variable).
+- **G2 (N3):** the 64 KB header limit has never taken effect (dev `:10`, prod `:14`). Options: rename the key, which changes behaviour, or delete the line, which changes nothing.
+- **G3 (M1, manager-found):** `logging.level.org.springframework.web=DEBUG` (dev `:184`, prod `:188`) logs the query string, `?apiKey=` included, to `logs/onelike.log` (`CONSOLE-CONTRACT.md:394`, from a code read; not measured in a booted context). In addition, 32 `log.(debug|info)(…getRemoteAddr` lines in 15 `SearchController*` files log caller IPs. This undercuts C's "no query string, no IP".
+- **G4 (H13):** is the frontend single-language cycle's "Not yet" about timing, or is something blocking it?
+
+**Human-only actions**
+
+| # | Action | Status | Last measured |
+|---|---|---|---|
+| H1 | Read-only MySQL credential, or rule out boot-based DB verification | open | never |
+| H2 | Settle `ONELIKE_NEWS_FILTER_APIKEY` | open; non-blank in the test JVM | 2026-10-19 C (attributed) |
+| H3 | Push local commits | A and B pushed (refs equal `799a181`); C not landed; push only on explicit request | 2026-10-19 C |
+| H4 | Confirm `news_block.linkspreview` on dev and prod | open | never |
+| H5 | Rotate HIBP/Webshare keys | open | never |
+| H6 | Rotate the `ghp_…` PAT on Jenkins | open | 2026-10-19 C, worktree only (0; control 10, prose) |
+| H7 | `JWT_SECRET` parity | open, not urgent. Substitutes: (i) minted token plus curl needs a running pair; (ii) a fingerprint means a forbidden read; (iii) prod is a deployment fact | never |
+| H8 | Does a proxy strip `Authorization` | open | never |
+| H9 | `filter_news` rows with NULL `active` | open, blocked by H1 | never |
+| H10 | Release `feature/theme-allowance-ui` whole or not at all | open | 2026-10-19 C |
+| H11 | After deploy, confirm the prod access log appears under `/logs` in the `%t %m %U %s %b %{ms}T` shape, and that `/logs` is persisted and writable | open | never |
+| H12 | Decide G1–G3 | open | 2026-10-19 C |
+| H13 | Frontend single-language cycle | parked ("Not yet"); ask G4 | 2026-10-19 C (`onelike-agentic/src/components/Home.js:400-414`, 15 dispatches) |
+
+**Backlog, priority-ordered**
+
+1. The `performSearchNews` NPE (the recommendation). Standalone. Last measured: 2026-10-19 C.
+2. **N1:** make the access-log guard an allowlist (`ServerPropertiesGuardTest.java:75`). Rides with the next properties or guard change, or with G2/G3. Hatch 0. Last measured: 2026-10-19 C.
+3. **Dead keys `accesslog.buffer-size` / `.delay`** (`:8-9`, both files). Confirm with the runtime-value instrument first. Rides with row 2. Hatch 0. Last measured: not measured.
+4. **N5:** the `filter_news` create-race. **Hatch 2 of 3** (B, C). Last measured: never.
+5. **T15 owns its rows.** Hatch 1. Last measured: never.
+6. **`:716` observable** (`fallbackCard` at `:721`, called at `:556`). Hatch 1. Last measured: 2026-10-19 C.
+7. **`IsolatedH2Extension` snapshot timing.** Hatch 1. Last measured: 2026-10-19 C.
+8. **`PinService` null-guard** (`:67`). Rides with the next `PinService.java` change. Hatch 1. Last measured: 2026-10-19 C.
+9. **Observe `refreshed > 0` with live proxies.** Now consent-gated (outward requests); a gate question for the next feed-job cycle. Last measured: never.
+
+**Cross-repo handoffs:**
+- Frontend single-language (H13). There is no pinned spec for `/service/news*`; a backend `?lang=` change would need `bridge`.
+- `Item.js` pointer row (owner `bridge`).
+- jx2 `PublicApiController.java:103`/`:234` still unscoped.
+
+**Process rows:** the stream-watchdog watch stays at 2 of 3; no stall in C. C's rulings 1–6 are owed at stage 06. Controller flag: if G3(b), the guard could also refuse `org.springframework.web=DEBUG` in the prod file.
+
+**Hatch ticks (from C's table):**
+- T15 1; `fallbackCard` 1; `IsolatedH2Extension` 1; **N5 2**; `PinService` 1; `refreshed>0` 1 (reclassified as consent-gated).
+- Not counted: the NPE row (not a rider) and `Item.js` (not hostable here).
+
+**Dropped:** F5 (done); the thread-configuration question (done).
+
+### Stage-06 gate answers (verbatim)
+
+- Land C: "Apply all, commit, push (Recommended)"
+- **M1** (DEBUG `org.springframework.web` probably writes `?apiKey=` to `logs/onelike.log`; 32 debug lines log IPs): "Next cycle: measure, then fix (Recommended)". This is the next objective: prove it with a local booted test, set the prod Spring-web log level to INFO, extend the guard, and consider the IP lines.
+- **N3** (64 KB header limit never took effect): "Delete the line, keep 8 KB (Recommended)". A zero-change property edit; it rides with the M1 cycle.
+- **N2** (usernames in `/logs` via `/roosbreaker/{username}`): "Accept (Recommended)". Settled; do not re-raise.
+
+### Process review (controller)
+
+**Orchestrator miss found by `controller`: I mojibaked `.claude/agents/planner.md` in cycle B's stage 06.**
+- A byte-mode `perl -0777 -i` substitution under `LC_ALL=C` contained the wide character `\x{2032}`. Perl upgraded the whole string and re-encoded every existing UTF-8 byte as Latin-1, giving 42 double-encoded sequences.
+- It was committed and pushed in `799a181`. The same count in `18442a0`/`c8d844b` is 0.
+- **Repaired:** `orch-C/undouble.pl` (md5 `39b94a16…`) decodes UTF-8, maps chars < 256 back to bytes, and re-encodes chars ≥ 256.
+- Result: 0 double-encoded sequences across all tracked `*.md`. The em-dash count is 32, versus 30 at `c8d844b`; the +2 come from cycle B's inserted text. A diff against `c8d844b` shows only the intended `:40` and `:44` changes.
+- **Rule for the orchestrator:** never put a non-ASCII escape into a byte-mode `perl -i` edit. Use the Edit tool for text containing non-ASCII, and check `\xC3[\x80-\xBF]\xC2[\x80-\xBF]` = 0 afterwards.
+
+**Controller's orchestrator findings:**
+- (a) proportionate; the standing fix is item 1.
+- (b) proportionate; the plan's task titles were missing (item 11).
+- (c) proportionate.
+- (d) the "code-read" qualifier on the Hikari claim did not travel into `ServerPropertiesGuardTest.java:50-52` (fixed by item 9).
+
+| # | Recommendation | Completion |
+|---|---|---|
+| 1 | Outward-request rule in `CLAUDE.md` (before § Agentic loop), plus a `planner.md` pointer | applied |
+| 2 | `CLAUDE.md` `grep -i` substitutes: single `-e`; `git grep` tracked files only | applied |
+| 3 | New *Sound* row: "does this Spring Boot property take effect" | applied (cross-referenced by row name) |
+| 4 | Production-config fact under § Commands | applied |
+| 5 | `CLAUDE.md:11` count 118 over 16 classes; revision `2026-10-19-b` | applied. Per-class counts re-read by the orchestrator from the 16 Surefire XMLs before landing |
+| 6 | `verifier.md` rule 9 mutant-file audit, plus an output-format row | applied |
+| 7 | Repair `planner.md` encoding | applied (above) |
+| 8 | Stale citations: `verifier.md:26` `:130`→`:131`; `CONSOLE-CONTRACT.md:148` → dev `:173-174` / prod `:177-178`; `:283` `:99,101`→`:100,102` | applied. Each line re-read by key (`jwt.secret`/`jwt.expiration`; `fixed-delay-ms`/`max-per-tick`; `spring.cache.type`). Ask the user later whether citations should name property keys instead of line numbers |
+| 9 | Comment-only pass on `ServerPropertiesGuardTest.java` `:30-31` and `:50-52` | applied by `builder`. Method-body and comment-stripped md5s unchanged (`25eab226…`), must-differ `1b181889…`. Orchestrator re-derivation with its own naive stripper `orch-C/strip.pl` (md5 `387749d1…`): before = after `25eab226…`, must-differ differs. Corroborated. 24/24 |
+| 10 | `AGENTIC-LOOP.md:40` garbled sentence fixed; `:125` fourth instance plus the per-file kill-set rule; `builder.md` pointer | applied |
+| 11 | `AGENTIC-LOOP.md:38` gate record includes the plan's task titles | applied |
+| 12 | `planner.md` checklist 14 (measure the reported symptom before the named cause); checklist 6 sub-clause (how the target environment loads a config file) | applied ("Apply all") |
+| 13 | Next `planner` brief: M1 plus N3 (user-chosen), N1 allowlist rider, dead keys via the new *Sound* row | carried to the next brief |

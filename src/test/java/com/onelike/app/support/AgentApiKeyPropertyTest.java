@@ -1,7 +1,8 @@
 package com.onelike.app.support;
 
 import com.onelike.app.exception.FilterNewsException;
-import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.autoconfigure.context.PropertyPlaceholderAutoConfiguration;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
@@ -26,11 +27,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * layer and no database: a minimal context holding only the placeholder
  * auto-configuration and the AgentApiKey bean.
  *
- * The property value is read from the real classpath application.properties
- * and asserted to be exactly the bare placeholder, then fed into the context.
- * So this tests the shipped line, and an inline default added to it (which
- * would let a missing variable boot with that default) fails here first.
- * Only that one key is read from the file; no other value is touched.
+ * The property value is read from each real classpath property file - both
+ * application.properties and application.prod.properties, every case runs
+ * once per file - and asserted to be exactly the bare placeholder, then fed
+ * into the context. So this tests both shipped lines, and an inline default
+ * added to either (which would let a missing variable boot with that default)
+ * fails here first. Only that one key is read from each file; no other value
+ * is touched.
  *
  * The process environment and the JVM system properties are removed before
  * the context refreshes, and the initializer refuses if either is still
@@ -57,10 +60,10 @@ class AgentApiKeyPropertyTest {
 
     private static final String FIXTURE_KEY = "test-fixture-property-key-not-a-real-secret";
 
-    private static String shippedPropertyValue() throws IOException {
-        Properties properties = PropertiesLoaderUtils.loadProperties(new ClassPathResource("application.properties"));
+    private static String shippedPropertyValue(String file) throws IOException {
+        Properties properties = PropertiesLoaderUtils.loadProperties(new ClassPathResource(file));
         String value = properties.getProperty(PROPERTY);
-        assertNotNull(value, PROPERTY + " is missing from classpath application.properties");
+        assertNotNull(value, PROPERTY + " is missing from classpath " + file);
         return value;
     }
 
@@ -78,10 +81,10 @@ class AgentApiKeyPropertyTest {
         }
     }
 
-    private static ApplicationContextRunner runner() throws IOException {
-        String value = shippedPropertyValue();
+    private static ApplicationContextRunner runner(String file) throws IOException {
+        String value = shippedPropertyValue(file);
         assertEquals("${" + VARIABLE + "}", value,
-                PROPERTY + " in application.properties is no longer the bare placeholder");
+                PROPERTY + " in " + file + " is no longer the bare placeholder");
 
         return new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(PropertyPlaceholderAutoConfiguration.class))
@@ -99,18 +102,20 @@ class AgentApiKeyPropertyTest {
         return false;
     }
 
-    @Test
-    void absentVariableRefusesToStartAndNamesIt() throws IOException {
-        runner().run(context -> {
+    @ParameterizedTest
+    @ValueSource(strings = {"application.properties", "application.prod.properties"})
+    void absentVariableRefusesToStartAndNamesIt(String file) throws IOException {
+        runner(file).run(context -> {
             assertNotNull(context.getStartupFailure(), "context started with " + VARIABLE + " absent");
             assertTrue(chainMentions(context.getStartupFailure(), VARIABLE),
                     "startup failure chain does not name " + VARIABLE);
         });
     }
 
-    @Test
-    void emptyVariableStartsAndTheBeanRejectsEveryKey() throws IOException {
-        runner().withPropertyValues(VARIABLE + "=").run(context -> {
+    @ParameterizedTest
+    @ValueSource(strings = {"application.properties", "application.prod.properties"})
+    void emptyVariableStartsAndTheBeanRejectsEveryKey(String file) throws IOException {
+        runner(file).withPropertyValues(VARIABLE + "=").run(context -> {
             assertEquals(null, context.getStartupFailure(), "context failed to start with " + VARIABLE + " empty");
             AgentApiKey agentApiKey = context.getBean(AgentApiKey.class);
 
@@ -123,9 +128,10 @@ class AgentApiKeyPropertyTest {
         });
     }
 
-    @Test
-    void controlConfiguredVariableStartsAndTheBeanAcceptsIt() throws IOException {
-        runner().withPropertyValues(VARIABLE + "=" + FIXTURE_KEY).run(context -> {
+    @ParameterizedTest
+    @ValueSource(strings = {"application.properties", "application.prod.properties"})
+    void controlConfiguredVariableStartsAndTheBeanAcceptsIt(String file) throws IOException {
+        runner(file).withPropertyValues(VARIABLE + "=" + FIXTURE_KEY).run(context -> {
             assertEquals(null, context.getStartupFailure(), "context failed to start with " + VARIABLE + " set");
             AgentApiKey agentApiKey = context.getBean(AgentApiKey.class);
 
